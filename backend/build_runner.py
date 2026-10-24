@@ -181,6 +181,44 @@ def collect_openscap_audit(build_id: str) -> dict:
     }
 
 
+# Validation connects to the hardened image as this baked non-root sudo user
+# (root ssh is disabled on the hardened image). Key comes from SSM.
+VAL_SSH_USER = os.environ.get("CIS_VAL_USER", "cisval")
+VAL_KEY_SECRET = os.environ.get("CIS_VAL_KEY_SECRET", "cis-platform-shared-builder-ssh-key")
+VAL_KEY_VERSION = os.environ.get("CIS_VAL_KEY_VERSION", "v1")
+
+
+def fetch_validation_key(env, log_append):
+    """Fetch the cisval PEM private key from SSM to a 0600 temp file; return its
+    path (or None). tccli authenticates via the already-refreshed creds in env."""
+    import tempfile
+    cmd = ["tccli", "ssm", "GetSecretValue",
+           "--region", env.get("TENCENTCLOUD_REGION", "ap-singapore"),
+           "--SecretName", VAL_KEY_SECRET, "--VersionId", VAL_KEY_VERSION,
+           "--output", "json"]
+    try:
+        out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log_append(f"SSM key fetch failed: {e}\n")
+        return None
+    if out.returncode != 0:
+        log_append(f"SSM key fetch failed: {(out.stderr or out.stdout)[:300]}\n")
+        return None
+    try:
+        pem = json.loads(out.stdout).get("SecretString", "")
+    except (ValueError, json.JSONDecodeError):
+        log_append("SSM key fetch: could not parse response\n")
+        return None
+    if not pem:
+        log_append("SSM key fetch: empty SecretString\n")
+        return None
+    fd, path = tempfile.mkstemp(prefix="cisval-", suffix=".pem")
+    with os.fdopen(fd, "w", newline="\n") as f:
+        f.write(pem if pem.endswith("\n") else pem + "\n")
+    os.chmod(path, 0o600)
+    return path
+
+
 VALIDATE_STAGING = os.path.join(PIPELINE_DIR, "audit-results", "latest-validate")
 # The validate template lives in its OWN subdir (packer/validate/) so Packer
 # doesn't merge it with the main template (which would duplicate variables).
@@ -245,6 +283,15 @@ def run_postboot_validation(build_id, image_id, log_append, env):
     for k in ("region", "zone", "instance_type", "vpc_id", "subnet_id", "security_group_id"):
         if net_vars.get(k):
             cmd += ["-var", f"{k}={net_vars[k]}"]
+
+    # The hardened image disables ROOT ssh, so the validate template connects as
+    # the baked 'cisval' user with the SSM private key. Fetch it to a temp file.
+    key_path = fetch_validation_key(env, log_append)
+    if not key_path:
+        return {"available": False, "error": "could not fetch cisval SSH key from SSM"}
+    cmd += ["-var", f"ssh_username={VAL_SSH_USER}",
+            "-var", f"ssh_private_key_file={key_path}"]
+
     cmd.append(validate_dir)
     log_append(f"\n===== POST-BOOT VALIDATION: {' '.join(cmd)} (cwd={pipeline_root}) =====\n")
     captured = []
@@ -263,6 +310,12 @@ def run_postboot_validation(build_id, image_id, log_append, env):
         return {"available": False, "error": "packer not found"}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "error": str(e)}
+    finally:
+        try:
+            if key_path and os.path.exists(key_path):
+                os.remove(key_path)
+        except OSError:
+            pass
 
     full = "".join(captured)
     # The validation template creates a transient image — delete it.
