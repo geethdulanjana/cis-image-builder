@@ -115,15 +115,38 @@ def _ssh_run(key_path, ip, remote_cmd, timeout=600):
         return 124, "ssh command timed out"
 
 
+def _port_open(ip, port, log, attempts=10, delay=8):
+    """TCP-connect probe: distinguishes 'sshd/network down' from 'auth rejected'."""
+    import socket
+    for i in range(attempts):
+        try:
+            with socket.create_connection((ip, port), timeout=5):
+                return True
+        except OSError as e:
+            if i == 0 or i == attempts - 1:
+                log(f"  port {port} probe {i+1}/{attempts}: {e}")
+            time.sleep(delay)
+    return False
+
+
 def _wait_ssh(key_path, ip, log, cancelled, timeout=SSH_TIMEOUT):
     deadline = time.time() + timeout
+    attempt = 0
+    last = ""
     while time.time() < deadline:
         if cancelled():
             return False
-        rc, _ = _ssh_run(key_path, ip, "echo __ssh_ok__", timeout=15)
-        if rc == 0:
+        attempt += 1
+        rc, out = _ssh_run(key_path, ip, "echo __ssh_ok__", timeout=15)
+        if rc == 0 and "__ssh_ok__" in out:
             return True
+        last = out.strip()
+        # Log every few attempts so the reason is visible (auth vs refused vs
+        # timeout), not just a silent spin to teardown.
+        if attempt == 1 or attempt % 4 == 0:
+            log(f"  ssh attempt {attempt} rc={rc}: {last[:200]}")
         time.sleep(8)
+    log(f"  ssh gave up after {attempt} attempts. last error: {last[:300]}")
     return False
 
 
@@ -258,10 +281,21 @@ def run_validation(validation_id: str, image_id: str, on_update=None,
             return record
         log(f"instance RUNNING at {ip}")
 
+        # Diagnostics: key sanity + is port 22 even open on the box?
+        try:
+            ksz = os.path.getsize(key_path)
+            log(f"ssh key: {key_path} ({ksz} bytes), user={VAL_USER}, target={ip}:22")
+        except OSError:
+            pass
+        if _port_open(ip, 22, log):
+            log("port 22 is OPEN (sshd reachable) — auth/user is the next gate")
+        else:
+            log("port 22 NOT reachable — network/SG/route or sshd not up yet")
+
         # 4. Wait for SSH as cisval.
         if not _wait_ssh(key_path, ip, log, cancelled):
             update(status="failed", reason="SSH never came up (cisval)",
-                   error="is the cisval user baked into the image?",
+                   error="see log: port-22/auth diagnostics above",
                    finished_at=_utcnow())
             return record
         log("SSH up as cisval")
