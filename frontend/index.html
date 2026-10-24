@@ -110,6 +110,7 @@
   <div class="tab active" data-tab="build">Build</div>
   <div class="tab" data-tab="controls">Controls</div>
   <div class="tab" data-tab="builds">Builds &amp; Logs</div>
+  <div class="tab" data-tab="validate">Validate</div>
 </div>
 
 <!-- TAB: BUILD -->
@@ -205,6 +206,41 @@
 
     <h2 id="manifestTitle" style="display:none">Selected-controls manifest (what was requested)</h2>
     <div id="manifestBox"></div>
+  </div>
+</div>
+
+<!-- TAB: VALIDATE -->
+<div class="tabpane" data-pane="validate">
+  <div class="scroll">
+    <div class="card">
+      <h2>End-to-end image validation</h2>
+      <p class="note">Boots a throwaway CVM from a hardened image, reboots it so
+        reboot-dependent CIS controls take effect, checks the instance is healthy,
+        then runs OpenSCAP to measure how many CIS controls actually pass. The
+        temporary CVM and its image are torn down automatically.</p>
+      <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <input id="valImageId" placeholder="img-xxxxxxxx (hardened image to validate)" style="min-width:320px" />
+        <select id="valDistro">
+          <option value="rhel10">rhel10</option>
+          <option value="rhel9">rhel9</option>
+        </select>
+        <input id="valLabel" placeholder="label (optional)" />
+        <button id="valBtn">Validate image</button>
+        <span id="valMsg" class="note"></span>
+      </div>
+    </div>
+
+    <h2>Validations</h2>
+    <table>
+      <thead><tr><th>When (local)</th><th>Duration</th><th>Label</th><th>Image</th><th>Status</th><th>Health</th><th>OpenSCAP (CIS)</th><th>Reason</th><th>Actions</th></tr></thead>
+      <tbody id="valsBody"><tr><td colspan="9" class="note">No validations yet.</td></tr></tbody>
+    </table>
+
+    <h2 id="valLogTitle" style="display:none">
+      Validation log
+      <span id="valLogMark" class="note" style="margin-left:8px"></span>
+    </h2>
+    <pre id="valLog" style="display:none"></pre>
   </div>
 </div>
 
@@ -376,6 +412,7 @@ async function refreshBuilds(){
       if(b.audit_verified&&b.audit_verified.available) act+=`<a class="act" href="#" data-scap="${b.build_id}" data-kind="verified">SCAP (verified)</a>`;
       if(b.audit&&b.audit.available) act+=`<a class="act" href="#" data-scap="${b.build_id}" data-kind="preliminary">SCAP (prelim)</a>`;
       if(running) act+=`<a class="act danger" href="#" data-cancel="${b.build_id}">cancel</a>`;
+      if(b.image_id) act+=`<a class="act" href="#" data-validate="${b.image_id}" data-vlabel="${esc(b.label||"")}" data-vdistro="${esc(b.distro||"")}">validate</a>`;
       if(b.image_id) act+=`<a class="act danger" href="#" data-delimg="${b.image_id}">delete image</a>`;
       const dtag=b.distro?` <span class="note">[${esc(b.distro)}]</span>`:"";
       function fmtScore(a,tag){ if(!a||!a.available||a.score==null) return null;
@@ -395,6 +432,8 @@ async function refreshBuilds(){
       tr.querySelectorAll("[data-scap]").forEach(sa=>sa.onclick=(e)=>{e.preventDefault();openScapReport(b.build_id, sa.dataset.kind);});
       const ca=tr.querySelector("[data-cancel]"); if(ca) ca.onclick=(e)=>{e.preventDefault();cancelBuild(b.build_id);};
       const da=tr.querySelector("[data-delimg]"); if(da) da.onclick=(e)=>{e.preventDefault();deleteImage(b.image_id);};
+      const va=tr.querySelector("[data-validate]"); if(va) va.onclick=(e)=>{e.preventDefault();
+        startValidation(va.dataset.validate, va.dataset.vlabel, va.dataset.vdistro);};
       body.appendChild(tr);
     }
   }catch(e){}
@@ -403,6 +442,69 @@ async function cancelBuild(id){ if(!confirm("Cancel this running build?"))return
   try{ const r=await jpost(`/api/builds/${id}/cancel`,{}); if(!r.ok){toast("Cancel failed: "+await r.text());return;} toast("Canceling "+id); refreshBuilds(); }catch(e){toast("Cancel failed: "+e.message);} }
 async function deleteImage(imageId){ if(!confirm(`Delete Tencent image ${imageId}? Permanent.`))return;
   try{ const r=await jdel(`/api/images/${imageId}`); if(!r.ok){toast("Delete failed: "+await r.text());return;} toast("Deleted "+imageId); refreshBuilds(); }catch(e){toast("Delete failed: "+e.message);} }
+
+// ── Validations (end-to-end image boot + health + OpenSCAP) ───────────────────
+async function startValidation(imageId, label, distro){
+  imageId=(imageId||$("valImageId").value||"").trim();
+  if(!/^img-[0-9a-z]{6,}$/.test(imageId)){ toast("Enter a valid image id (img-...)"); gotoTab("validate"); return; }
+  const body={image_id:imageId, label:label||$("valLabel").value||null, distro:distro||$("valDistro").value||null};
+  try{ const r=await jpost("/api/validations",body);
+    if(!r.ok){ toast("Validation failed: "+await r.text()); return; }
+    const j=await r.json(); toast("Validation "+j.validation_id+" started");
+    gotoTab("validate"); refreshValidations(); showValLog(j.validation_id);
+  }catch(e){ toast("Validation failed: "+e.message); }
+}
+$("valBtn").onclick=()=>startValidation();
+
+function fmtHealth(h){ if(!h) return "—";
+  if(h.healthy){ const sr=h.system_running?` <span class="note">${esc(h.system_running)}</span>`:"";
+    return `<b style="color:var(--ok)">healthy</b>${sr}`; }
+  return `<b style="color:var(--bad)">unhealthy</b>`; }
+
+async function refreshValidations(){
+  try{ const {validations}=await jget("/api/validations"); const body=$("valsBody");
+    if(!validations.length){ body.innerHTML=`<tr><td colspan="9" class="note">No validations yet.</td></tr>`; return; }
+    body.innerHTML="";
+    for(const v of validations){ const tr=document.createElement("tr");
+      const running=RUNNING.has(v.status);
+      const when=fmtLocal(v.created_at);
+      const dur=fmtDuration(v.started_at, v.finished_at, running);
+      const a=v.audit;
+      let scap="—";
+      if(a&&a.score!=null){ const s=Math.round(a.score); const col=s>=90?"var(--ok)":s>=70?"var(--warn)":"var(--bad)";
+        scap=`<b style="color:${col}">${s}%</b> <span class="note">${a.passed!=null?`${a.passed} pass`:""}${a.failed!=null?` / ${a.failed} fail`:""}</span>`; }
+      else if(running){ scap=`<span class="note">running…</span>`; }
+      let act=`<a class="act" href="#" data-vlog="${v.validation_id}">log</a>`;
+      if(a&&a.available) act+=`<a class="act" href="#" data-vscap="${v.validation_id}">SCAP report</a>`;
+      if(running) act+=`<a class="act danger" href="#" data-vcancel="${v.validation_id}">cancel</a>`;
+      tr.innerHTML=`<td>${when}</td><td>${dur}</td><td>${esc(v.label)}</td>
+        <td class="imgid">${esc(v.image_id)}</td><td class="status ${v.status}">${esc(v.status)}</td>
+        <td>${fmtHealth(v.health)}</td><td>${scap}</td><td class="reason">${esc(v.reason)||""}</td><td>${act}</td>`;
+      tr.querySelector("[data-vlog]").onclick=(e)=>{e.preventDefault();showValLog(v.validation_id);};
+      const vs=tr.querySelector("[data-vscap]"); if(vs) vs.onclick=(e)=>{e.preventDefault();openValReport(v.validation_id);};
+      const vc=tr.querySelector("[data-vcancel]"); if(vc) vc.onclick=(e)=>{e.preventDefault();cancelValidation(v.validation_id);};
+      body.appendChild(tr);
+    }
+  }catch(e){}
+}
+async function cancelValidation(id){ if(!confirm("Cancel this running validation?"))return;
+  try{ const r=await jpost(`/api/validations/${id}/cancel`,{}); if(!r.ok){toast("Cancel failed: "+await r.text());return;} toast("Canceling "+id); refreshValidations(); }catch(e){toast("Cancel failed: "+e.message);} }
+function openValReport(id){ const u=`${API}/api/validations/${id}/audit/report?token=${encodeURIComponent(tok())}`; window.open(u,"_blank"); }
+
+// Validation log viewer (simple tail + SSE; validations are short).
+let valES=null;
+function stopValLog(){ if(valES){valES.close();valES=null;} }
+async function showValLog(id){ stopValLog();
+  $("valLogTitle").style.display=""; $("valLog").style.display="";
+  $("valLog").textContent="loading…"; $("valLogMark").textContent="(live)";
+  try{ const t=await (await fetch(`${API}/api/validations/${id}/log`,{headers:authHeaders()})).text(); $("valLog").textContent=t||"(no output yet)"; }catch(e){}
+  const u=`${API}/api/validations/${id}/stream?token=${encodeURIComponent(tok())}`;
+  valES=new EventSource(u);
+  valES.onmessage=(ev)=>{ const pre=$("valLog"); pre.textContent+=(pre.textContent?"\n":"")+ev.data; pre.scrollTop=pre.scrollHeight; };
+  valES.addEventListener("status",(ev)=>{ $("valLogMark").textContent="("+ev.data+")"; refreshValidations(); });
+  valES.addEventListener("done",(ev)=>{ $("valLogMark").textContent="(finished — "+ev.data+")"; stopValLog(); refreshValidations(); });
+  valES.onerror=()=>{ $("valLogMark").textContent="(stream closed)"; stopValLog(); };
+}
 
 // per-control OUTCOME (what actually happened in the run)
 const RES_META={
@@ -606,8 +708,8 @@ $("diffBtn").onclick=()=>{ const base=presets.presets[$("preset").value]; const 
 
 // init
 async function init(){ try{ await loadDistros(); await loadCatalog(); presets=await jget("/api/presets");
-  renderPresets(); refreshBuilds(); refreshStatus(); refreshSavedSelections();
-  setInterval(()=>{ refreshBuilds(); refreshStatus(); },5000);
+  renderPresets(); refreshBuilds(); refreshStatus(); refreshSavedSelections(); refreshValidations();
+  setInterval(()=>{ refreshBuilds(); refreshStatus(); refreshValidations(); },5000);
 }catch(e){ toast("Init failed: "+e.message); } }
 init();
 </script>

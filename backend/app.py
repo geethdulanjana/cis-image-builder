@@ -45,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import build_runner
+import validation_runner
 import vars_generator
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -198,6 +199,8 @@ def _load_details(distro: str) -> dict:
     return _details_cache[distro]
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
 STORE_PATH = os.environ.get("CIS_STORE_PATH", os.path.join(HERE, "builds_store.json"))
+VALIDATIONS_PATH = os.environ.get(
+    "CIS_VALIDATIONS_PATH", os.path.join(HERE, "validations_store.json"))
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 
 # Shared access token. If CIS_AUTH_TOKEN is set, all /api/* requests must send
@@ -258,6 +261,34 @@ def _utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── Validations store (separate JSON file, same pattern as builds) ────────────
+_val_lock = threading.Lock()
+
+
+def _load_validations() -> dict:
+    if not os.path.exists(VALIDATIONS_PATH):
+        return {"validations": {}}
+    with open(VALIDATIONS_PATH, encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def _save_validations(data: dict):
+    tmp = VALIDATIONS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, VALIDATIONS_PATH)
+
+
+def _upsert_validation(record: dict):
+    with _val_lock:
+        data = _load_validations()
+        data["validations"][record["validation_id"]] = {
+            **data["validations"].get(record["validation_id"], {}),
+            **record,
+        }
+        _save_validations(data)
+
+
 # ── Request models ────────────────────────────────────────────────────────────
 class Selection(BaseModel):
     sections: Optional[Dict[str, bool]] = None
@@ -275,6 +306,12 @@ class BuildRequest(BaseModel):
     label: Optional[str] = None
     distro: Optional[str] = None          # "rhel10" | "rhel9"
     base_image_id: Optional[str] = None   # img-xxxx; overrides template default
+
+
+class ValidationRequest(BaseModel):
+    image_id: str                         # the hardened image to validate (img-xxxx)
+    label: Optional[str] = None
+    distro: Optional[str] = None
 
 
 def _resolve_distro(req: BuildRequest) -> str:
@@ -796,6 +833,178 @@ def delete_image(image_id: str):
                 b["reason"] = (b.get("reason") or "") + " | image deleted"
         _save_store(store)
     return result
+
+
+# ── Validations (end-to-end: boot image -> health -> OpenSCAP -> teardown) ────
+@app.post("/api/validations", dependencies=[Depends(require_auth)])
+def submit_validation(req: ValidationRequest):
+    image_id = (req.image_id or "").strip()
+    if not re.fullmatch(r"img-[0-9a-z]{6,}", image_id):
+        raise HTTPException(status_code=400, detail=f"invalid image id: {image_id}")
+
+    # Share the single job lock with builds: one heavy Packer job at a time.
+    if not _build_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail=(f"a build/validation is already running "
+                    f"(build_id={_active_build['build_id']}). Wait for it to finish."),
+        )
+
+    validation_id = uuid.uuid4().hex[:12]
+    _active_build["build_id"] = validation_id
+    distro = (req.distro or DEFAULT_DISTRO)
+
+    record = {
+        "validation_id": validation_id,
+        "image_id": image_id,
+        "label": req.label or image_id,
+        "distro": distro,
+        "status": "queued",
+        "created_at": _utcnow(),
+        "started_at": None,
+        "finished_at": None,
+        "health": None,
+        "audit": None,
+        "reason": None,
+        "error": None,
+    }
+    _upsert_validation(record)
+
+    def _worker():
+        try:
+            validation_runner.run_validation(
+                validation_id,
+                image_id,
+                on_update=lambda r: _upsert_validation(r),
+                dry_run=DRY_RUN,
+                label=req.label or "",
+                distro=distro,
+            )
+        finally:
+            _active_build["build_id"] = None
+            _build_lock.release()
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"validation_id": validation_id, "status": "queued", "image_id": image_id,
+            "dry_run": DRY_RUN}
+
+
+@app.get("/api/validations", dependencies=[Depends(require_auth)])
+def list_validations():
+    data = _load_validations()
+    vals = sorted(
+        data["validations"].values(),
+        key=lambda v: v.get("created_at", ""),
+        reverse=True,
+    )
+    return {"validations": vals}
+
+
+@app.get("/api/validations/{validation_id}", dependencies=[Depends(require_auth)])
+def get_validation(validation_id: str):
+    v = _load_validations()["validations"].get(validation_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="validation not found")
+    return v
+
+
+@app.get("/api/validations/{validation_id}/log", response_class=PlainTextResponse,
+         dependencies=[Depends(require_auth)])
+def get_validation_log(validation_id: str, tail: int = 400):
+    v = _load_validations()["validations"].get(validation_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="validation not found")
+    lp = v.get("log_path")
+    if not lp or not os.path.exists(lp):
+        return ""
+    with open(lp, encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    return "".join(lines[-tail:])
+
+
+@app.get("/api/validations/{validation_id}/stream")
+def stream_validation(validation_id: str, token: str = Query(default="")):
+    """SSE stream of a validation's log + status (same pattern as builds)."""
+    if AUTH_TOKEN and token != AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="missing or invalid auth token")
+    v = _load_validations()["validations"].get(validation_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="validation not found")
+
+    terminal = {"succeeded", "failed", "canceled"}
+    TAIL_BYTES = 64 * 1024
+
+    def _event_gen():
+        pos = 0
+        lp = v.get("log_path")
+        if lp and os.path.exists(lp):
+            pos = max(0, os.path.getsize(lp) - TAIL_BYTES)
+        last_status = None
+        idle = 0
+        while True:
+            rec = _load_validations()["validations"].get(validation_id, {})
+            status = rec.get("status")
+            log_path = rec.get("log_path")
+            if log_path and os.path.exists(log_path):
+                with open(log_path, encoding="utf-8", errors="replace") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+                if chunk:
+                    for line in chunk.splitlines():
+                        yield f"data: {line}\n\n"
+                    idle = 0
+                else:
+                    idle += 1
+            else:
+                idle += 1
+
+            if status != last_status:
+                yield f"event: status\ndata: {status}\n\n"
+                last_status = status
+
+            if status in terminal:
+                yield f"event: done\ndata: {status}\n\n"
+                return
+            time.sleep(1)
+            if idle > 1800:
+                yield "event: done\ndata: timeout\n\n"
+                return
+
+    return StreamingResponse(_event_gen(), media_type="text/event-stream")
+
+
+@app.get("/api/validations/{validation_id}/audit/report")
+def get_validation_report(validation_id: str, token: str = Query(default="")):
+    """Serve the OpenSCAP HTML report for a validation."""
+    if AUTH_TOKEN and token and token != AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid auth token")
+    v = _load_validations()["validations"].get(validation_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="validation not found")
+    a = v.get("audit") or {}
+    rp = a.get("report_path")
+    if not rp or not os.path.exists(rp):
+        raise HTTPException(status_code=404, detail="no report for this validation")
+    return FileResponse(rp, media_type="text/html",
+                        filename=f"openscap-validation-{validation_id}.html")
+
+
+@app.post("/api/validations/{validation_id}/cancel", dependencies=[Depends(require_auth)])
+def cancel_validation(validation_id: str):
+    v = _load_validations()["validations"].get(validation_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="validation not found")
+    if not validation_runner.is_running(validation_id):
+        raise HTTPException(status_code=409, detail="validation is not running")
+
+    def _mark(status):
+        _upsert_validation({"validation_id": validation_id, "status": status})
+
+    ok = validation_runner.cancel_validation(validation_id, mark_status_cb=_mark)
+    if not ok:
+        raise HTTPException(status_code=409, detail="could not cancel (already finished?)")
+    return {"validation_id": validation_id, "status": "canceling"}
 
 
 # ── Saved selections ──────────────────────────────────────────────────────────

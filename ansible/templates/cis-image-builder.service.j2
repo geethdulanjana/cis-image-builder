@@ -13,10 +13,11 @@ WorkingDirectory={{ app_dir }}/backend
 # Shared API token. Empty disables auth — keep it set for the public CLB.
 Environment=CIS_AUTH_TOKEN={{ cis_auth_token }}
 
-# Persistent app state OUTSIDE the repo so redeploys never wipe build history
-# or saved selections.
+# Persistent app state OUTSIDE the repo so redeploys never wipe build history,
+# saved selections, or validation history.
 Environment=CIS_STORE_PATH={{ state_dir }}/builds_store.json
 Environment=CIS_SELECTIONS_PATH={{ state_dir }}/saved_selections.json
+Environment=CIS_VALIDATIONS_PATH={{ state_dir }}/validations_store.json
 
 # Pipeline paths on the builder.
 Environment=CIS_PIPELINE_DIR={{ pipeline_dir }}
