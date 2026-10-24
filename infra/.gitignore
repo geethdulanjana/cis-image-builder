@@ -1,0 +1,11 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+tfout
+
+# Keep terraform.tfvars template in git? It contains no secrets (ids only), but
+# if you prefer not to commit it, uncomment the next line.
+# terraform.tfvars

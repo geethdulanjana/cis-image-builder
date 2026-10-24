@@ -1,0 +1,55 @@
+# systemd unit for the CIS Image Builder backend.
+#
+# Install (on the builder CVM, as root):
+#   cp deploy/cis-image-builder.service /etc/systemd/system/
+#   # edit the Environment= lines below to match your paths + secret
+#   systemctl daemon-reload
+#   systemctl enable --now cis-image-builder
+#   systemctl status cis-image-builder
+#   journalctl -u cis-image-builder -f     # follow logs
+#
+# The service runs uvicorn directly (not run.sh) so systemd manages the process
+# lifecycle. Adjust WorkingDirectory / ExecStart if your install path differs.
+
+[Unit]
+Description=CIS Image Builder (RHEL10-CIS -> Tencent TKE hardened images)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/cis-image-builder/backend
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+# REQUIRED: set a strong shared token; the API is unauthenticated without it.
+Environment=CIS_AUTH_TOKEN=cis@logdia
+# Pipeline paths (match your builder layout).
+Environment=CIS_PIPELINE_DIR=/opt/cis-pipeline
+Environment=CIS_PACKER_DIR=/opt/cis-pipeline/packer
+Environment=CIS_GROUP_VARS_PATH=/opt/cis-pipeline/ansible/group_vars/all.yml
+Environment=CIS_BUILD_LOG_DIR=/opt/cis-pipeline/logs
+# Base/source image id — never recorded as a build output or deletable.
+# Keep in sync with source_image_id in packer/variables.auto.pkrvars.hcl.
+Environment=CIS_BASE_IMAGE_ID=img-4o7u81vk
+# Region used for image deletion via tccli.
+Environment=TENCENTCLOUD_REGION=ap-singapore
+# Set DRY_RUN=1 to simulate builds (no packer). Leave unset/0 for real builds.
+# Environment=DRY_RUN=0
+# Uncomment for verbose packer logs when debugging.
+# Environment=CIS_PACKER_DEBUG=1
+
+# Bind address/port. Front this with the cloud SG / CLB.
+ExecStart=/usr/bin/env python3 -m uvicorn app:app --host 0.0.0.0 --port 8080
+
+Restart=on-failure
+RestartSec=3
+# Give a running build time to be torn down on stop before SIGKILL.
+TimeoutStopSec=30
+
+# Light hardening of the service itself.
+NoNewPrivileges=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+# Oneshot service that runs the retention cleanup. Triggered by the timer.
+[Unit]
+Description=CIS Image Builder retention cleanup
+
+[Service]
+Type=oneshot
+User=root
+Environment=CIS_BUILD_LOG_DIR=/opt/cis-pipeline/logs
+Environment=CIS_STORE_PATH=/root/cis-image-builder/backend/builds_store.json
+ExecStart=/usr/bin/env python3 /root/cis-image-builder/deploy/cleanup.py --log-days 30 --keep-builds 200

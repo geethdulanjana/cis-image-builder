@@ -1,0 +1,59 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# render-pkrvars.sh  (executed on the builder CVM via TAT — no SSH)
+#
+# Terraform renders this script with the LIVE infra ids and ships it to the
+# builder as a TAT command. It writes the Packer pkrvars file so the pipeline
+# always targets the current VPC/subnet/SG. Idempotent: it only rewrites when
+# content differs, and keeps a timestamped backup of the previous file.
+#
+# Rendered by: cis-image-builder/infra/tat.tf  (templatefile)
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+PKRVARS="${pkrvars_path}"
+mkdir -p "$(dirname "$PKRVARS")"
+
+NEW_CONTENT=$(cat <<'PKREOF'
+# ─────────────────────────────────────────────────────────────────────────────
+# Packer Variables — MANAGED BY TERRAFORM (TAT render-pkrvars).
+# Do NOT edit by hand: changes are overwritten on the next `terraform apply`
+# whenever the VPC/subnet/SG/image ids change. Source of truth:
+#   cis-image-builder/infra  (outputs -> tat.tf -> this file)
+# ─────────────────────────────────────────────────────────────────────────────
+region        = "${region}"
+zone          = "${zone}"
+instance_type = "${instance_type}"
+
+# Base image the build launches from.
+source_image_id = "${source_image_id}"
+
+# Network — the builder's VPC/subnet/SG (from Terraform outputs).
+vpc_id            = "${vpc_id}"
+subnet_id         = "${subnet_id}"
+security_group_id = "${security_group_id}"
+
+# Output image naming.
+image_name_prefix = "${image_name_prefix}"
+image_description = "${image_description}"
+
+# Tags.
+environment = "${tag_environment}"
+project     = "${tag_project}"
+PKREOF
+)
+
+# Only rewrite if changed (keeps mtime stable + avoids needless churn).
+if [ -f "$PKRVARS" ] && [ "$(cat "$PKRVARS")" = "$NEW_CONTENT" ]; then
+  echo "pkrvars already up to date: $PKRVARS"
+  exit 0
+fi
+
+if [ -f "$PKRVARS" ]; then
+  cp -a "$PKRVARS" "$PKRVARS.bak.$(date +%Y%m%d-%H%M%S)"
+fi
+
+printf '%s\n' "$NEW_CONTENT" > "$PKRVARS"
+echo "wrote pkrvars: $PKRVARS"
+echo "--- rendered ---"
+cat "$PKRVARS"

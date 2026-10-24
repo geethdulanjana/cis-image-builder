@@ -1,0 +1,74 @@
+{
+  "_comment": "Curated TKE (Kubernetes worker node) risk overrides. Layered onto the generated catalog by generate_catalog.py. 'risk' levels: breaking = will stop node join or pod networking/runtime; caution = may affect some workloads or debugging; safe = default (no entry needed). 'lever' names the role variable that controls the safe behaviour. Derived from analysing the RHEL10-CIS role tasks.",
+  "controls": {
+    "3.3.1.1": {
+      "risk": "breaking",
+      "reason": "Disables net.ipv4.ip_forward. kube-proxy and every CNI require ip_forward=1 for pod/Service routing.",
+      "lever": "rhel10cis_is_router",
+      "safe_value": true
+    },
+    "3.3.1.2": {
+      "risk": "breaking",
+      "reason": "Disables net.ipv4.conf.all.forwarding. Breaks pod-to-pod and NodePort routing.",
+      "lever": "rhel10cis_is_router",
+      "safe_value": true
+    },
+    "3.3.1.3": {
+      "risk": "breaking",
+      "reason": "Disables net.ipv4.conf.default.forwarding. Breaks forwarding on new interfaces (pod veths).",
+      "lever": "rhel10cis_is_router",
+      "safe_value": true
+    },
+    "3.3.2.1": {
+      "risk": "caution",
+      "reason": "Disables IPv6 all.forwarding. Only breaks IPv6/dual-stack clusters; harmless for IPv4-only.",
+      "lever": "rhel10cis_is_router",
+      "safe_value": true
+    },
+    "3.3.2.2": {
+      "risk": "caution",
+      "reason": "Disables IPv6 default.forwarding. Only relevant for IPv6/dual-stack clusters.",
+      "lever": "rhel10cis_is_router",
+      "safe_value": true
+    },
+    "1.1.2.4.2": {
+      "risk": "caution",
+      "reason": "Adds nodev to /var. kubelet/containerd operate under /var/lib; nodev is usually tolerable but relaxed to be safe.",
+      "lever": "rhel10cis_rule_1_1_2_4_2",
+      "safe_value": false
+    },
+    "1.1.2.4.3": {
+      "risk": "caution",
+      "reason": "Adds nosuid to /var. Can affect some CSI/CNI helper binaries under /var/lib.",
+      "lever": "rhel10cis_rule_1_1_2_4_3",
+      "safe_value": false
+    },
+    "1.1.2.1.4": {
+      "risk": "caution",
+      "reason": "Adds noexec to /tmp. Kubernetes does not exec from /tmp, but some bootstrap/Helm hooks might.",
+      "lever": "rhel10cis_rule_1_1_2_1_4",
+      "safe_value": false
+    }
+  },
+  "section_levers": {
+    "4": {
+      "risk": "breaking",
+      "reason": "firewalld with the default public zone blocks kubelet (10250), NodePort (30000-32767), and CNI overlay traffic. Nothing in the role opens these ports.",
+      "lever": "rhel10cis_firewall",
+      "safe_value": "none",
+      "note": "TKE worker nodes are fronted by a Tencent Security Group, which is the enforced network boundary."
+    }
+  },
+  "feature_levers": {
+    "rhel10cis_selinux_enforce": {
+      "risk": "caution",
+      "reason": "SELinux enforcing may block containerd/kubelet without validated contexts (needs container-selinux).",
+      "safe_value": "permissive"
+    },
+    "rhel10cis_is_router": {
+      "risk": "breaking",
+      "reason": "Primary lever to keep IPv4+IPv6 forwarding on for kube-proxy/CNI.",
+      "safe_value": true
+    }
+  }
+}

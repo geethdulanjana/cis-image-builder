@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CIS Image Builder</title>
+<style>
+  :root {
+    --bg:#0f1720; --panel:#17212b; --panel2:#1e2a37; --text:#e6edf3;
+    --muted:#8b98a5; --line:#2b3a4a; --accent:#3b82f6; --accent2:#2563eb;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
+  header { padding:12px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header .sub { color:var(--muted); font-size:13px; }
+  header .spacer { flex:1; }
+  .pill { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:12px; padding:2px 10px; }
+  /* tabs */
+  .tabs { display:flex; gap:4px; padding:0 22px; border-bottom:1px solid var(--line); background:var(--bg); }
+  .tab { padding:10px 16px; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent; font-weight:500; }
+  .tab:hover { color:var(--text); }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .tabpane { display:none; flex:1; overflow:hidden; }
+  .tabpane.active { display:flex; }
+  .scroll { overflow-y:auto; padding:18px 22px; width:100%; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:18px 0 9px; }
+  h2:first-child { margin-top:0; }
+  select, button, input { font:inherit; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+  input::placeholder { color:var(--muted); }
+  button { cursor:pointer; } button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent2); font-weight:600; }
+  button.primary:hover { background:var(--accent2); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.sm { padding:3px 9px; font-size:12px; }
+  .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; max-width:720px; }
+  .note { color:var(--muted); font-size:12px; }
+  .preset-desc { color:var(--muted); margin:8px 0 0; }
+  /* controls */
+  .toolbar { position:sticky; top:0; background:var(--bg); padding-bottom:10px; z-index:5; }
+  .counts { color:var(--muted); font-size:12px; }
+  .section { border:1px solid var(--line); border-radius:8px; margin-bottom:9px; background:var(--panel); overflow:hidden; }
+  .section-head { display:flex; align-items:center; gap:10px; padding:9px 11px; cursor:pointer; user-select:none; }
+  .section-head:hover { background:var(--panel2); }
+  .section-head .name { flex:1; font-weight:600; }
+  .section-head .count { color:var(--muted); font-size:12px; }
+  .controls { display:none; border-top:1px solid var(--line); }
+  .controls.open { display:block; }
+  .ctl { border-bottom:1px solid var(--line); font-size:13px; }
+  .ctl:last-child { border-bottom:none; }
+  .ctl-row { display:flex; align-items:flex-start; gap:9px; padding:7px 11px; }
+  .ctl-row:hover { background:var(--panel2); }
+  .ctl .id { color:var(--muted); font-family:ui-monospace,monospace; min-width:76px; }
+  .ctl .title { flex:1; min-width:0; }
+  .ctl .acts { white-space:nowrap; }
+  .locked { opacity:.55; }
+  .badge { font-size:11px; padding:1px 7px; border-radius:10px; font-weight:600; white-space:nowrap; }
+  .badge.breaking { background:rgba(239,68,68,.15); color:#fca5a5; border:1px solid #7f1d1d; }
+  .badge.caution  { background:rgba(245,158,11,.15); color:#fcd34d; border:1px solid #78350f; }
+  .ctl-detail { display:none; padding:4px 11px 12px 96px; background:#0d141c; border-top:1px dashed var(--line); }
+  .ctl-detail.open { display:block; }
+  .kv { display:grid; grid-template-columns:110px 1fr; gap:3px 12px; margin:8px 0; font-size:12px; }
+  .kv .k { color:var(--muted); }
+  .chip { display:inline-block; font-size:11px; background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:1px 8px; margin:2px 4px 2px 0; font-family:ui-monospace,monospace; }
+  pre { background:#0b1118; border:1px solid var(--line); border-radius:8px; padding:12px; overflow:auto; font-size:12px; font-family:ui-monospace,SFMono-Regular,monospace; margin:6px 0; }
+  #preview { max-height:40vh; max-width:720px; }
+  #log { min-height:240px; max-height:56vh; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  .status { font-weight:600; }
+  .status.queued,.status.preparing,.status.running,.status.verifying { color:var(--warn); }
+  .status.succeeded { color:var(--ok); } .status.failed { color:var(--bad); }
+  .status.canceled,.status.canceling { color:var(--muted); }
+  .reason { color:var(--muted); font-size:12px; }
+  .imgid { font-family:ui-monospace,monospace; color:var(--accent); }
+  a { color:var(--accent); } a.act { margin-right:9px; } a.danger { color:#fca5a5; }
+  .live-dot { color:var(--ok); }
+  .diff-add { color:var(--ok); } .diff-del { color:var(--bad); }
+  .pstat { display:inline-block; font-size:12px; font-weight:600; border-radius:10px; padding:2px 10px; margin-right:6px; border:1px solid var(--line); }
+  .pstat.pok { color:var(--ok); } .pstat.pchg { color:var(--accent); }
+  .pstat.pskip { color:var(--muted); } .pstat.pfail { color:var(--bad); }
+  .resgrp { border:1px solid var(--line); border-radius:8px; margin-bottom:8px; background:var(--panel); overflow:hidden; }
+  .resgrp-head { display:flex; align-items:center; gap:10px; padding:8px 11px; cursor:pointer; user-select:none; font-weight:600; }
+  .resgrp-head:hover { background:var(--panel2); }
+  .resgrp-head .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .resgrp-body { display:none; border-top:1px solid var(--line); max-height:320px; overflow-y:auto; }
+  .resgrp-body.open { display:block; }
+  .resrow { display:flex; gap:9px; padding:5px 11px; border-bottom:1px solid var(--line); font-size:13px; }
+  .resrow:last-child { border-bottom:none; }
+  .resrow .id { color:var(--muted); font-family:ui-monospace,monospace; min-width:76px; }
+  .d-ok { background:var(--ok); } .d-changed { background:var(--accent); }
+  .d-skipped { background:var(--muted); } .d-failed { background:var(--bad); }
+  .toast { position:fixed; bottom:18px; right:18px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:11px 15px; max-width:380px; display:none; z-index:50; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CIS Image Builder</h1>
+  <span class="sub">RHEL-CIS → Tencent TKE hardened images</span>
+  <span class="spacer"></span>
+  <span class="pill" id="pillDistro">—</span>
+  <span class="pill" id="pillAuth">auth?</span>
+</header>
+
+<div class="tabs">
+  <div class="tab active" data-tab="build">Build</div>
+  <div class="tab" data-tab="controls">Controls</div>
+  <div class="tab" data-tab="builds">Builds &amp; Logs</div>
+</div>
+
+<!-- TAB: BUILD -->
+<div class="tabpane active" data-pane="build">
+  <div class="scroll">
+    <div class="card">
+      <h2>Base image &amp; distribution</h2>
+      <div class="row">
+        <label class="row" style="gap:6px">Distro <select id="distro"></select></label>
+        <input id="baseImage" class="grow" placeholder="base image id (img-xxxx) — optional, else template default" />
+      </div>
+      <h2>Preset</h2>
+      <div class="row">
+        <select id="preset"></select>
+        <label class="row" style="gap:6px"><input type="checkbox" id="tkeSafe" checked /> TKE-safe</label>
+      </div>
+      <p class="preset-desc" id="presetDesc"></p>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="buildBtn">Build image</button>
+        <button id="previewBtn">Preview vars</button>
+        <button id="diffBtn">Diff vs preset</button>
+        <span id="buildMsg" class="note"></span>
+      </div>
+      <p class="note" style="margin-top:10px">Tip: fine-tune individual controls in the <b>Controls</b> tab — each one shows the exact Ansible task it runs.</p>
+    </div>
+
+    <div class="card">
+      <h2>Saved selections</h2>
+      <div class="row">
+        <select id="savedSel"><option value="">— saved selections —</option></select>
+        <button id="loadSelBtn">Load</button>
+        <button id="delSelBtn">Delete</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="selName" class="grow" placeholder="name to save current selection" />
+        <button id="saveSelBtn">Save current</button>
+      </div>
+    </div>
+
+    <h2>Generated group_vars (preview)</h2>
+    <pre id="preview">Click "Preview vars" to see the exact generated all.yml.</pre>
+  </div>
+</div>
+
+<!-- TAB: CONTROLS -->
+<div class="tabpane" data-pane="controls">
+  <div class="scroll">
+    <div class="toolbar">
+      <div class="row">
+        <input id="filter" class="grow" placeholder="filter by id, title, or risk (breaking/caution)…" />
+        <button id="expandAll" class="sm">⊕ expand</button>
+        <button id="collapseAll" class="sm">⊖ collapse</button>
+      </div>
+      <div class="row" style="margin-top:6px"><span class="counts" id="counts"></span></div>
+    </div>
+    <div class="note" style="margin:6px 0">
+      <span class="badge breaking">breaking</span> stops node join/networking ·
+      <span class="badge caution">caution</span> may affect workloads · breaking
+      controls are locked when TKE-safe is on · click <b>Show Ansible</b> on a
+      control to see exactly what it runs.
+    </div>
+    <div id="sections"></div>
+  </div>
+</div>
+
+<!-- TAB: BUILDS & LOGS -->
+<div class="tabpane" data-pane="builds">
+  <div class="scroll">
+    <h2>Builds</h2>
+    <table>
+      <thead><tr><th>When (local)</th><th>Duration</th><th>Label</th><th>Status</th><th>SCAP score</th><th>Reason</th><th>Image</th><th>Controls</th><th>Actions</th></tr></thead>
+      <tbody id="buildsBody"><tr><td colspan="9" class="note">No builds yet.</td></tr></tbody>
+    </table>
+
+    <h2 id="logTitle" style="display:none">
+      Build log
+      <label style="text-transform:none;letter-spacing:normal;font-weight:400;margin-left:12px;color:var(--text)">
+        <input type="checkbox" id="logLive" checked /> live
+      </label>
+      <span id="logLiveMark" class="note" style="margin-left:8px"></span>
+    </h2>
+    <div id="progressBar" style="display:none;margin:4px 0 10px">
+      <span class="pstat pok" id="pOk">ok 0</span>
+      <span class="pstat pchg" id="pChg">changed 0</span>
+      <span class="pstat pskip" id="pSkip">skipped 0</span>
+      <span class="pstat pfail" id="pFail">failed 0</span>
+      <span class="note" id="pCurrent" style="margin-left:10px"></span>
+    </div>
+    <pre id="log" style="display:none"></pre>
+
+    <h2 id="resultsTitle" style="display:none">Per-control outcome (from the run)</h2>
+    <div id="resultsBox"></div>
+
+    <h2 id="manifestTitle" style="display:none">Selected-controls manifest (what was requested)</h2>
+    <div id="manifestBox"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API="";
+let catalog=null, presets=null, disabledControls=new Set();
+let currentDistro="rhel10"; const detailCache={};
+const $=(id)=>document.getElementById(id);
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function toast(m){ const t=$("toast"); t.textContent=m; t.style.display="block"; setTimeout(()=>t.style.display="none",4000); }
+
+// tabs
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".tabpane").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  document.querySelector(`.tabpane[data-pane="${t.dataset.tab}"]`).classList.add("active");
+});
+function gotoTab(name){ document.querySelector(`.tab[data-tab="${name}"]`).click(); }
+
+// auth fetch
+function tok(){ return localStorage.getItem("cis_token")||""; }
+function authHeaders(e){ const h=e?{...e}:{}; if(tok()) h["X-Auth-Token"]=tok(); return h; }
+function promptToken(){ const t=prompt("Access token (X-Auth-Token):", tok()); if(t!==null) localStorage.setItem("cis_token",t.trim()); }
+async function jget(u){ const r=await fetch(API+u,{headers:authHeaders()}); if(r.status===401){promptToken();throw new Error("auth");} if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(u,b){ const r=await fetch(API+u,{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(b)}); if(r.status===401){promptToken();throw new Error("auth");} return r; }
+async function jdel(u){ const r=await fetch(API+u,{method:"DELETE",headers:authHeaders()}); if(r.status===401){promptToken();throw new Error("auth");} return r; }
+
+// selection
+function currentSelection(){ const p=presets.presets[$("preset").value];
+  return { sections:{...p.sections}, levels:{...p.levels}, disabled_controls:[...disabledControls],
+    tke_safe:$("tkeSafe").checked, cloud_image_exceptions:p.cloud_image_exceptions!==false, distro:currentDistro }; }
+function buildPayload(label){ const b={selection:currentSelection(),distro:currentDistro};
+  const img=$("baseImage").value.trim(); if(img) b.base_image_id=img; if(label) b.label=label; return b; }
+
+// distro + catalog
+async function loadDistros(){ const d=await jget("/api/distros"); currentDistro=d.default||"rhel10";
+  const sel=$("distro"); sel.innerHTML="";
+  for(const it of d.distros){ const o=document.createElement("option"); o.value=it.distro;
+    o.textContent=it.distro.toUpperCase()+(it.available?"":" (unavailable)"); if(!it.available)o.disabled=true; sel.appendChild(o); }
+  sel.value=currentDistro; $("pillDistro").textContent=currentDistro;
+  sel.onchange=async()=>{ currentDistro=sel.value; $("pillDistro").textContent=currentDistro; for(const k in detailCache) delete detailCache[k]; await loadCatalog(); renderSections(); };
+}
+async function loadCatalog(){ catalog=await jget("/api/catalog?distro="+encodeURIComponent(currentDistro)); }
+
+// presets
+function renderPresets(){ const sel=$("preset"); sel.innerHTML="";
+  for(const [k,p] of Object.entries(presets.presets)){ if(k.startsWith("_"))continue;
+    const o=document.createElement("option"); o.value=k; o.textContent=p.label; sel.appendChild(o); }
+  sel.onchange=onPresetChange; onPresetChange(); }
+function onPresetChange(){ const p=presets.presets[$("preset").value]; $("presetDesc").textContent=p.description||"";
+  disabledControls=new Set(p.disabled_controls||[]); renderSections(); }
+
+// controls render + filter + inline detail
+function matchesFilter(c,q){ if(!q)return true; q=q.toLowerCase();
+  return c.id.toLowerCase().includes(q)||(c.title||"").toLowerCase().includes(q)||(c.tke_risk||"").toLowerCase().includes(q); }
+function renderSections(){
+  const wrap=$("sections"); wrap.innerHTML=""; const tkeSafe=$("tkeSafe").checked; const sel=currentSelection();
+  const q=$("filter").value.trim(); let shown=0, enabledCount=0, total=catalog.controls.length;
+  for(const c of catalog.controls){ if(!disabledControls.has(c.id)&&sel.sections[c.section]!==false) enabledCount++; }
+  for(const sec of catalog.sections){
+    const secOn=sel.sections[sec.number]!==false;
+    const ctls=catalog.controls.filter(c=>c.section===sec.number && matchesFilter(c,q));
+    if(q&&ctls.length===0) continue; shown+=ctls.length;
+    const div=document.createElement("div"); div.className="section";
+    const head=document.createElement("div"); head.className="section-head";
+    head.innerHTML=`<input type="checkbox" ${secOn?"checked":""} />
+      <span class="name">Section ${sec.number} — ${esc(sec.name)}</span>
+      <span class="count">${ctls.length}${q?" shown":"/"+sec.control_count} ▸</span>`;
+    const body=document.createElement("div"); body.className="controls"+(q?" open":"");
+    head.querySelector("input").onclick=(e)=>{ e.stopPropagation(); toggleSection(sec.number,e.target.checked); };
+    head.onclick=()=>body.classList.toggle("open");
+    for(const c of ctls){
+      const locked=tkeSafe&&c.tke_risk==="breaking"; const enabled=!disabledControls.has(c.id)&&secOn;
+      const badge=c.tke_risk!=="safe"?`<span class="badge ${c.tke_risk}" title="${esc(c.tke_reason||'')}">${c.tke_risk}</span>`:"";
+      const ctl=document.createElement("div"); ctl.className="ctl"+(locked?" locked":"");
+      const btn=c.has_detail?`<button class="sm" data-detail="${c.id}">Show Ansible</button>`:`<span class="note">no detail</span>`;
+      ctl.innerHTML=`<div class="ctl-row">
+          <input type="checkbox" ${enabled?"checked":""} ${locked||!secOn?"disabled":""} />
+          <span class="id">${c.id}</span>
+          <span class="title">${esc(c.title)||"(no title)"} ${badge}</span>
+          <span class="acts">${btn}</span>
+        </div>
+        <div class="ctl-detail" data-detailbox="${c.id}"></div>`;
+      const cb=ctl.querySelector("input");
+      if(!locked&&secOn) cb.onclick=()=>{ if(cb.checked)disabledControls.delete(c.id); else disabledControls.add(c.id); renderCounts(); };
+      const db=ctl.querySelector("[data-detail]"); if(db) db.onclick=()=>toggleDetail(c.id, ctl);
+      body.appendChild(ctl);
+    }
+    div.appendChild(head); div.appendChild(body); wrap.appendChild(div);
+  }
+  renderCounts();
+  function renderCounts(){ $("counts").textContent=`${enabledCount} enabled of ${total} controls`+(q?` · ${shown} match filter`:""); }
+}
+function toggleSection(num,on){ presets.presets[$("preset").value].sections[num]=on; renderSections(); }
+async function toggleDetail(id, ctlEl){
+  const box=ctlEl.querySelector(`[data-detailbox="${id}"]`);
+  const btn=ctlEl.querySelector("[data-detail]");
+  if(box.classList.contains("open")){ box.classList.remove("open"); btn.textContent="Show Ansible"; return; }
+  btn.textContent="Hide Ansible"; box.classList.add("open");
+  if(box.dataset.loaded){ return; }
+  box.innerHTML=`<span class="note">loading…</span>`;
+  try{
+    let d=detailCache[id];
+    if(!d){ d=await jget(`/api/control/${encodeURIComponent(id)}?distro=${encodeURIComponent(currentDistro)}`); detailCache[id]=d; }
+    const cmds=(d.commands||[]).map(c=>`<pre>${esc(c)}</pre>`).join("");
+    const mods=(d.modules||[]).map(m=>`<span class="chip">${esc(m)}</span>`).join("")||"<span class='note'>—</span>";
+    box.innerHTML=`<div class="kv">
+        <div class="k">File(s)</div><div class="note">${esc((d.files||[]).join(", "))||"—"}</div>
+        <div class="k">Modules</div><div>${mods}</div>
+        <div class="k">Shell/cmd</div><div>${cmds||"<span class='note'>none (uses modules)</span>"}</div>
+      </div>
+      <div class="note">Ansible task(s) that run:</div>
+      <pre>${esc(d.tasks_yaml||"(no task body)")}</pre>`;
+    box.dataset.loaded="1";
+  }catch(e){ box.innerHTML=`<span class="note">No detail available.</span>`; }
+}
+$("tkeSafe").onchange=renderSections;
+let ft=null; $("filter").oninput=()=>{ clearTimeout(ft); ft=setTimeout(renderSections,150); };
+$("expandAll").onclick=()=>document.querySelectorAll(".controls").forEach(e=>e.classList.add("open"));
+$("collapseAll").onclick=()=>document.querySelectorAll(".controls").forEach(e=>e.classList.remove("open"));
+
+// preview / build
+$("previewBtn").onclick=async()=>{ try{ const r=await jpost("/api/preview",buildPayload());
+  if(!r.ok){toast("Preview failed: "+await r.text());return;} $("preview").textContent=await r.text();
+}catch(e){toast("Preview failed: "+e.message);} };
+$("buildBtn").onclick=async()=>{ $("buildBtn").disabled=true; $("buildMsg").textContent="submitting…";
+  try{ const label=presets.presets[$("preset").value].label+" ("+currentDistro+")";
+    const r=await jpost("/api/builds",buildPayload(label));
+    if(r.status===409){ $("buildMsg").textContent="busy"; toast("A build is already running."); return; }
+    if(!r.ok){ $("buildMsg").textContent="error"; toast("Build failed: "+await r.text()); return; }
+    const j=await r.json(); $("buildMsg").textContent=`queued ${j.build_id}`+(j.dry_run?" (dry-run)":"");
+    toast("Build "+j.build_id+" submitted"); gotoTab("builds"); refreshBuilds(); showLog(j.build_id); showManifest(j.build_id);
+  }catch(e){ toast("Build failed: "+e.message); } finally{ $("buildBtn").disabled=false; } };
+
+// builds table
+const RUNNING=new Set(["queued","preparing","running","canceling","verifying"]);
+// Backend stores timestamps in UTC ISO form (datetime.now(timezone.utc)). Some
+// may lack an explicit offset, so treat a naive string as UTC by appending "Z".
+function parseUtc(s){ if(!s) return null;
+  let t=String(s);
+  if(!/[zZ]$|[+\-]\d\d:?\d\d$/.test(t)) t+="Z";
+  const d=new Date(t); return isNaN(d.getTime())?null:d; }
+function fmtLocal(s){ const d=parseUtc(s); if(!d) return "—";
+  return d.toLocaleString([], {year:"numeric",month:"short",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",second:"2-digit"}); }
+function fmtDuration(startS, endS, running){
+  const start=parseUtc(startS); if(!start) return "—";
+  const end=running?new Date():parseUtc(endS);
+  if(!end) return "—";
+  let secs=Math.max(0, Math.round((end.getTime()-start.getTime())/1000));
+  const h=Math.floor(secs/3600); secs-=h*3600;
+  const m=Math.floor(secs/60); const s=secs-m*60;
+  const parts=[]; if(h) parts.push(h+"h"); if(h||m) parts.push(m+"m"); parts.push(s+"s");
+  const txt=parts.join(" ");
+  return running?`<span class="note">${txt}…</span>`:txt;
+}
+async function refreshBuilds(){
+  try{ const {builds}=await jget("/api/builds"); const body=$("buildsBody");
+    if(!builds.length){ body.innerHTML=`<tr><td colspan="9" class="note">No builds yet.</td></tr>`; return; }
+    body.innerHTML="";
+    for(const b of builds){ const tr=document.createElement("tr");
+      const running=RUNNING.has(b.status);
+      const when=fmtLocal(b.created_at);
+      const dur=fmtDuration(b.started_at, b.finished_at, running);
+      let act=`<a class="act" href="#" data-log="${b.build_id}">log</a><a class="act" href="#" data-man="${b.build_id}">manifest</a>`;
+      if(b.audit_verified&&b.audit_verified.available) act+=`<a class="act" href="#" data-scap="${b.build_id}" data-kind="verified">SCAP (verified)</a>`;
+      if(b.audit&&b.audit.available) act+=`<a class="act" href="#" data-scap="${b.build_id}" data-kind="preliminary">SCAP (prelim)</a>`;
+      if(running) act+=`<a class="act danger" href="#" data-cancel="${b.build_id}">cancel</a>`;
+      if(b.image_id) act+=`<a class="act danger" href="#" data-delimg="${b.image_id}">delete image</a>`;
+      const dtag=b.distro?` <span class="note">[${esc(b.distro)}]</span>`:"";
+      function fmtScore(a,tag){ if(!a||!a.available||a.score==null) return null;
+        const s=Math.round(a.score); const col=s>=90?"var(--ok)":s>=70?"var(--warn)":"var(--bad)";
+        return `<b style="color:${col}">${s}%</b> <span class="note">${tag}${a.failed!=null?` ${a.failed} fail`:""}</span>`; }
+      const vScore=fmtScore(b.audit_verified,"verified"), pScore=fmtScore(b.audit,"prelim");
+      let score="—";
+      if(vScore&&pScore) score=vScore+"<br>"+pScore;
+      else if(vScore) score=vScore;
+      else if(pScore) score=pScore;
+      else if(b.status==="verifying") score=`<span class="note">verifying…</span>`;
+      tr.innerHTML=`<td>${when}</td><td>${dur}</td><td>${esc(b.label)}${dtag}</td>
+        <td class="status ${b.status}">${b.status}</td><td>${score}</td><td class="reason">${esc(b.reason)||""}</td>
+        <td class="imgid">${b.image_id||"—"}</td><td>${b.applied_count!=null?b.applied_count:"—"}</td><td>${act}</td>`;
+      tr.querySelector("[data-log]").onclick=(e)=>{e.preventDefault();showLog(b.build_id);};
+      tr.querySelector("[data-man]").onclick=(e)=>{e.preventDefault();showManifest(b.build_id);};
+      tr.querySelectorAll("[data-scap]").forEach(sa=>sa.onclick=(e)=>{e.preventDefault();openScapReport(b.build_id, sa.dataset.kind);});
+      const ca=tr.querySelector("[data-cancel]"); if(ca) ca.onclick=(e)=>{e.preventDefault();cancelBuild(b.build_id);};
+      const da=tr.querySelector("[data-delimg]"); if(da) da.onclick=(e)=>{e.preventDefault();deleteImage(b.image_id);};
+      body.appendChild(tr);
+    }
+  }catch(e){}
+}
+async function cancelBuild(id){ if(!confirm("Cancel this running build?"))return;
+  try{ const r=await jpost(`/api/builds/${id}/cancel`,{}); if(!r.ok){toast("Cancel failed: "+await r.text());return;} toast("Canceling "+id); refreshBuilds(); }catch(e){toast("Cancel failed: "+e.message);} }
+async function deleteImage(imageId){ if(!confirm(`Delete Tencent image ${imageId}? Permanent.`))return;
+  try{ const r=await jdel(`/api/images/${imageId}`); if(!r.ok){toast("Delete failed: "+await r.text());return;} toast("Deleted "+imageId); refreshBuilds(); }catch(e){toast("Delete failed: "+e.message);} }
+
+// per-control OUTCOME (what actually happened in the run)
+const RES_META={
+  changed:{label:"Changed (remediated)",dot:"d-changed"},
+  ok:{label:"Applied / already compliant (ok)",dot:"d-ok"},
+  skipped:{label:"Skipped",dot:"d-skipped"},
+  failed:{label:"Failed",dot:"d-failed"},
+};
+async function showResults(id){
+  $("resultsTitle").style.display="block"; const box=$("resultsBox");
+  box.innerHTML=`<p class="note">loading outcomes…</p>`;
+  try{
+    const r=await jget(`/api/builds/${id}/results`);
+    if(!r.ready){ box.innerHTML=`<p class="note">No results yet (log not available).</p>`; return; }
+    const order=["failed","changed","ok","skipped"];
+    let html="";
+    for(const k of order){
+      const items=r.groups[k]||[]; const meta=RES_META[k];
+      const rows=items.map(c=>`<div class="resrow"><span class="id">${c.id}</span><span>${esc(c.title)}</span></div>`).join("")
+        || `<div class="resrow note">none</div>`;
+      const open=(k==="failed"&&items.length)?" open":"";
+      html+=`<div class="resgrp">
+        <div class="resgrp-head"><span class="dot ${meta.dot}"></span>${meta.label}
+          <span class="note" style="margin-left:auto">${items.length}</span></div>
+        <div class="resgrp-body${open}">${rows}</div></div>`;
+    }
+    const u=r.untagged||{};
+    const utot=(u.ok||0)+(u.changed||0)+(u.skipped||0)+(u.failed||0);
+    const c=r.counts||{};
+    const summary=`<p class="note">Per control: changed ${c.changed||0}, ok ${c.ok||0}, skipped ${c.skipped||0}, failed ${c.failed||0} ·
+      <a href="#" id="resCsv">download CSV</a></p>`;
+    const unote=utot?`<p class="note">Plus ${utot} task result(s) outside CIS controls (facts, prep): ok ${u.ok||0}, changed ${u.changed||0}, skipped ${u.skipped||0}, failed ${u.failed||0}.</p>`:"";
+    box.innerHTML=summary+html+unote;
+    box.querySelectorAll(".resgrp-head").forEach(h=>h.onclick=()=>h.nextElementSibling.classList.toggle("open"));
+    const csvA=$("resCsv"); if(csvA) csvA.onclick=(e)=>{ e.preventDefault(); downloadResultsCsv(id); };
+  }catch(e){ box.innerHTML=`<p class="note">No results available for this build.</p>`; }
+}
+async function openScapReport(id, kind){
+  kind=kind||"preliminary";
+  try{ const r=await fetch(API+`/api/builds/${id}/audit/report?kind=${encodeURIComponent(kind)}`,{headers:authHeaders()});
+    if(!r.ok){ toast("No "+kind+" SCAP report available"); return; }
+    const blob=await r.blob(); const url=URL.createObjectURL(blob);
+    window.open(url,"_blank");  // opens the OpenSCAP HTML report in a new tab
+  }catch(e){ toast("SCAP report failed: "+e.message); }
+}
+async function downloadResultsCsv(id){
+  try{ const r=await fetch(API+`/api/builds/${id}/results.csv`,{headers:authHeaders()});
+    if(!r.ok){ toast("CSV download failed"); return; }
+    const blob=await r.blob(); const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=`results-${id}.csv`; a.click(); URL.revokeObjectURL(url);
+  }catch(e){ toast("CSV download failed: "+e.message); }
+}
+
+// manifest (what was SELECTED)
+async function showManifest(id){
+  showResults(id); // also render the actual per-control outcome
+  $("manifestTitle").style.display="block"; const box=$("manifestBox"); box.innerHTML=`<p class="note">loading manifest…</p>`;
+  try{ const m=await jget(`/api/builds/${id}/manifest`);
+    const rows=m.controls.map(c=>`<tr><td class="imgid">${c.id}</td><td>${esc(c.title)}</td>
+      <td>${c.tke_risk!=="safe"?`<span class="badge ${c.tke_risk}">${c.tke_risk}</span>`:""}</td>
+      <td class="note">${esc((c.modules||[]).join(", "))}</td></tr>`).join("");
+    box.innerHTML=`<p class="note">${m.applied_count} controls applied · ${esc(m.benchmark||"")} ·
+        <a href="${API}/api/builds/${id}/manifest/download?_t=${Date.now()}" id="mdl">download JSON</a></p>
+      <table><thead><tr><th>Control</th><th>Title</th><th>Risk</th><th>Modules</th></tr></thead><tbody>${rows}</tbody></table>`;
+    // download needs auth header; intercept to fetch as blob
+    const a=$("mdl"); if(a) a.onclick=(e)=>{ e.preventDefault(); downloadManifest(id); };
+  }catch(e){ box.innerHTML=`<p class="note">No manifest for this build.</p>`; }
+}
+async function downloadManifest(id){
+  try{ const r=await fetch(API+`/api/builds/${id}/manifest/download`,{headers:authHeaders()});
+    if(!r.ok){toast("Download failed");return;} const blob=await r.blob();
+    const url=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=url; a.download=`manifest-${id}.json`; a.click(); URL.revokeObjectURL(url);
+  }catch(e){ toast("Download failed: "+e.message); }
+}
+
+// real-time log — bounded ring buffer + batched (rAF) DOM writes so large logs
+// never freeze the browser.
+const LOG_MAX_LINES=2000;          // keep only the last N lines in the DOM
+let logES=null, logBuildId=null;
+let logLines=[];                    // ring buffer of recent lines
+let logPending=[];                  // lines awaiting the next frame flush
+let logRaf=null;                    // pending requestAnimationFrame id
+let logRunning=false;               // is the viewed build currently running
+
+function stopLog(){ if(logES){logES.close();logES=null;} if(logRaf){cancelAnimationFrame(logRaf);logRaf=null;} logPending=[]; }
+
+function resetLogView(){ logLines=[]; logPending=[]; const p=$("log"); p.textContent=""; }
+
+function scheduleFlush(){
+  if(logRaf) return;
+  logRaf=requestAnimationFrame(()=>{
+    logRaf=null;
+    if(!logPending.length) return;
+    // move pending into the ring buffer, cap to LOG_MAX_LINES
+    logLines=logLines.concat(logPending); logPending=[];
+    let trimmed=false;
+    if(logLines.length>LOG_MAX_LINES){ logLines=logLines.slice(-LOG_MAX_LINES); trimmed=true; }
+    const p=$("log");
+    const nb=p.scrollTop+p.clientHeight>=p.scrollHeight-40;
+    // single DOM write per frame
+    p.textContent=(trimmed?"… (older lines trimmed; download full log for complete output)\n":"")+logLines.join("\n");
+    if(nb) p.scrollTop=p.scrollHeight;
+  });
+}
+function pushLines(arr){ if(!arr.length) return; logPending.push(...arr); scheduleFlush(); }
+
+function isBuildRunning(id){
+  // best-effort from the last builds snapshot in the table status cell
+  return logRunning;
+}
+
+function renderProgress(p){
+  if(!p) return;
+  $("progressBar").style.display="block";
+  $("pOk").textContent="ok "+(p.ok||0);
+  $("pChg").textContent="changed "+(p.changed||0);
+  $("pSkip").textContent="skipped "+(p.skipped||0);
+  $("pFail").textContent="failed "+(p.failed||0);
+  if(p.source==="recap"){ $("pCurrent").textContent="✓ final tally (PLAY RECAP)"; }
+  else { $("pCurrent").textContent=p.current?("current: "+p.current):""; }
+}
+
+async function showLog(id){
+  stopLog(); logBuildId=id; resetLogView();
+  $("logTitle").style.display="block"; $("log").style.display="block";
+  $("progressBar").style.display="none";
+  $("log").textContent="loading…";
+  // Decide running vs finished from a quick status fetch on the build.
+  logRunning=false;
+  try{ const b=await jget(`/api/builds/${id}`); logRunning=RUNNING.has(b.status); }catch(e){}
+  resetLogView();
+  // Always show the current pass/fail/skip tally.
+  try{ renderProgress(await jget(`/api/builds/${id}/progress`)); }catch(e){}
+  if(logRunning && $("logLive").checked){ startStream(id); }
+  else { await loadLogOnce(id); }   // finished build: one-shot tail, no SSE replay
+}
+
+async function loadLogOnce(id){
+  try{ const r=await fetch(API+`/api/builds/${id}/log?tail=${LOG_MAX_LINES}`,{headers:authHeaders()});
+    if(r.status===401){promptToken();return;}
+    const text=await r.text();
+    logLines=text.split("\n").slice(-LOG_MAX_LINES);
+    const p=$("log"); p.textContent=logLines.join("\n"); p.scrollTop=p.scrollHeight;
+    $("logLiveMark").textContent="(static — not live)";
+  }catch(e){ $("log").textContent="(failed to load log)"; }
+}
+
+function startStream(id){
+  $("logLiveMark").innerHTML='<span class="live-dot">● live</span>';
+  const url=API+`/api/builds/${id}/stream?token=${encodeURIComponent(tok())}`;
+  let es; try{ es=new EventSource(url); }catch(e){ loadLogOnce(id); return; } logES=es;
+  let batch=[]; let batchTimer=null;
+  const flushBatch=()=>{ if(batch.length){ pushLines(batch); batch=[]; } batchTimer=null; };
+  es.onmessage=(ev)=>{ if(logBuildId!==id) return;
+    batch.push(ev.data);
+    // coalesce bursts: flush at most ~10x/sec
+    if(!batchTimer) batchTimer=setTimeout(flushBatch,100);
+    if(batch.length>500) flushBatch();
+  };
+  es.addEventListener("progress",(ev)=>{ try{ renderProgress(JSON.parse(ev.data)); }catch(e){} });
+  es.addEventListener("done",(ev)=>{ flushBatch(); $("logLiveMark").textContent="(finished — "+ev.data+")"; stopLog(); refreshBuilds(); showManifest(id); });
+  es.onerror=()=>{ flushBatch(); $("logLiveMark").textContent="(stream closed)"; stopLog(); loadLogOnce(id); };
+}
+$("logLive").onchange=()=>{ if(!logBuildId)return;
+  if($("logLive").checked && logRunning){ resetLogView(); startStream(logBuildId); }
+  else { stopLog(); $("logLiveMark").textContent="(paused)"; loadLogOnce(logBuildId); } };
+
+// status
+async function refreshStatus(){ try{ const s=await jget("/api/status");
+  $("pillAuth").textContent=s.auth_enabled?"auth on":"auth off";
+  const btn=$("buildBtn"); if(s.build_running){ btn.disabled=true; btn.textContent="Build running…"; } else { btn.disabled=false; btn.textContent="Build image"; }
+}catch(e){} }
+
+// saved selections
+async function refreshSavedSelections(){ try{ const data=await jget("/api/selections"); const sel=$("savedSel"); const cur=sel.value;
+  sel.innerHTML=`<option value="">— saved selections —</option>`;
+  for(const name of Object.keys(data.selections||{})){ const o=document.createElement("option"); o.value=name; o.textContent=name; sel.appendChild(o); } sel.value=cur; }catch(e){} }
+$("saveSelBtn").onclick=async()=>{ const name=$("selName").value.trim(); if(!name){toast("Enter a name");return;}
+  try{ const r=await jpost("/api/selections",{name,selection:currentSelection()}); if(!r.ok){toast("Save failed: "+await r.text());return;} toast("Saved '"+name+"'"); $("selName").value=""; refreshSavedSelections(); }catch(e){toast("Save failed: "+e.message);} };
+$("loadSelBtn").onclick=async()=>{ const name=$("savedSel").value; if(!name){toast("Pick a selection");return;}
+  try{ const data=await jget("/api/selections"); const item=(data.selections||{})[name]; if(!item){toast("Not found");return;} applySelection(item.selection); gotoTab("controls"); toast("Loaded '"+name+"'"); }catch(e){toast("Load failed: "+e.message);} };
+$("delSelBtn").onclick=async()=>{ const name=$("savedSel").value; if(!name){toast("Pick a selection");return;} if(!confirm(`Delete saved selection '${name}'?`))return;
+  try{ const r=await jdel(`/api/selections/${encodeURIComponent(name)}`); if(!r.ok){toast("Delete failed: "+await r.text());return;} toast("Deleted '"+name+"'"); refreshSavedSelections(); }catch(e){toast("Delete failed: "+e.message);} };
+function applySelection(s){ if(s.distro&&s.distro!==currentDistro){ currentDistro=s.distro; $("distro").value=s.distro; $("pillDistro").textContent=s.distro; loadCatalog().then(()=>_applySel(s)); return; } _applySel(s); }
+function _applySel(s){ if(presets.presets["custom"]){ $("preset").value="custom"; onPresetChange(); } const p=presets.presets[$("preset").value];
+  if(s.sections) p.sections={...p.sections,...s.sections}; if(s.levels) p.levels={...p.levels,...s.levels};
+  $("tkeSafe").checked=s.tke_safe!==false; disabledControls=new Set(s.disabled_controls||[]); renderSections(); }
+
+// diff
+$("diffBtn").onclick=()=>{ const base=presets.presets[$("preset").value]; const cur=currentSelection();
+  const lines=[`Diff of current selection vs preset "${base.label}":`,""];
+  for(const sec of catalog.sections){ const b=base.sections[sec.number]!==false; const c=cur.sections[sec.number]!==false; if(b!==c) lines.push(`${c?"+":"-"} Section ${sec.number} ${c?"enabled":"disabled"}`); }
+  const bd=new Set(base.disabled_controls||[]), cd=new Set(cur.disabled_controls||[]);
+  for(const id of cd) if(!bd.has(id)) lines.push(`- control ${id} disabled`);
+  for(const id of bd) if(!cd.has(id)) lines.push(`+ control ${id} re-enabled`);
+  if((base.tke_safe!==false)!==cur.tke_safe) lines.push(`${cur.tke_safe?"+":"-"} TKE-safe ${cur.tke_safe?"on":"off"}`);
+  if(lines.length===2) lines.push("(no differences — matches the preset)");
+  $("preview").innerHTML=lines.map(l=>l.startsWith("+")?`<span class="diff-add">${esc(l)}</span>`:l.startsWith("-")?`<span class="diff-del">${esc(l)}</span>`:esc(l)).join("\n");
+};
+
+// init
+async function init(){ try{ await loadDistros(); await loadCatalog(); presets=await jget("/api/presets");
+  renderPresets(); refreshBuilds(); refreshStatus(); refreshSavedSelections();
+  setInterval(()=>{ refreshBuilds(); refreshStatus(); },5000);
+}catch(e){ toast("Init failed: "+e.message); } }
+init();
+</script>
+</body>
+</html>

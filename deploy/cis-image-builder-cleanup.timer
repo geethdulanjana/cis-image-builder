@@ -1,0 +1,18 @@
+# Runs the cleanup service daily.
+#
+# Install (on the builder CVM, as root):
+#   cp deploy/cis-image-builder-cleanup.service /etc/systemd/system/
+#   cp deploy/cis-image-builder-cleanup.timer   /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now cis-image-builder-cleanup.timer
+#   systemctl list-timers cis-image-builder-cleanup.timer
+
+[Unit]
+Description=Daily CIS Image Builder retention cleanup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

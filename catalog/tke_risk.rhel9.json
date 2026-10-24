@@ -1,0 +1,50 @@
+{
+  "_comment": "Curated TKE (Kubernetes worker node) risk overrides for RHEL9-CIS. Control ids follow the RHEL9 benchmark numbering (e.g. ip_forward is 3.3.1, not 3.3.1.1). The role-native levers (rhel9cis_is_router, rhel9cis_firewall, rhel9cis_selinux_enforce) match RHEL10's intent. Derived from analysing the RHEL9-CIS role tasks.",
+  "controls": {
+    "3.3.1": {
+      "risk": "breaking",
+      "reason": "Disables IP forwarding (net.ipv4.ip_forward and IPv6). kube-proxy and every CNI require ip_forward=1 for pod/Service routing.",
+      "lever": "rhel9cis_is_router",
+      "safe_value": true
+    },
+    "1.1.2.4.2": {
+      "risk": "caution",
+      "reason": "Adds nodev to /var. kubelet/containerd operate under /var/lib; relaxed to be safe.",
+      "lever": "rhel9cis_rule_1_1_2_4_2",
+      "safe_value": false
+    },
+    "1.1.2.4.3": {
+      "risk": "caution",
+      "reason": "Adds nosuid to /var. Can affect some CSI/CNI helper binaries under /var/lib.",
+      "lever": "rhel9cis_rule_1_1_2_4_3",
+      "safe_value": false
+    },
+    "1.1.2.1.4": {
+      "risk": "caution",
+      "reason": "Adds noexec to /tmp. Kubernetes does not exec from /tmp, but some bootstrap/Helm hooks might.",
+      "lever": "rhel9cis_rule_1_1_2_1_4",
+      "safe_value": false
+    }
+  },
+  "section_levers": {
+    "4": {
+      "risk": "breaking",
+      "reason": "firewalld with the default zone blocks kubelet (10250), NodePort (30000-32767), and CNI overlay traffic.",
+      "lever": "rhel9cis_firewall",
+      "safe_value": "none",
+      "note": "TKE worker nodes are fronted by a Tencent Security Group, which is the enforced network boundary."
+    }
+  },
+  "feature_levers": {
+    "rhel9cis_selinux_enforce": {
+      "risk": "caution",
+      "reason": "SELinux enforcing may block containerd/kubelet without validated contexts.",
+      "safe_value": "permissive"
+    },
+    "rhel9cis_is_router": {
+      "risk": "breaking",
+      "reason": "Primary lever to keep IPv4+IPv6 forwarding on for kube-proxy/CNI.",
+      "safe_value": true
+    }
+  }
+}

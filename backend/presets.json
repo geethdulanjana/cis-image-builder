@@ -1,0 +1,50 @@
+{
+  "_comment": "Presets consumed by vars_generator.py. A preset is a named selection. Presets are DISTRO-AGNOSTIC (they carry no distro-specific control ids); the distro (rhel9/rhel10) is chosen separately in the UI/API and resolves the matching catalog + variable prefix. 'tke_safe: true' auto-applies the TKE exception set (forwarding on, firewall none, /var mounts relaxed, SELinux permissive) regardless of other choices. A preset MAY set an optional \"distro\" to pin one.",
+  "presets": {
+    "tke-safe-full": {
+      "label": "TKE-Safe Full Hardening",
+      "description": "All CIS sections enabled, with the curated Kubernetes exceptions so the image works as a TKE worker node. Recommended default.",
+      "sections": { "1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "7": true },
+      "levels": { "level_1": true, "level_2": true },
+      "tke_safe": true,
+      "disabled_controls": [],
+      "cloud_image_exceptions": true
+    },
+    "level1-tke": {
+      "label": "Level 1 Only (TKE-safe)",
+      "description": "Only CIS Level 1 controls, with Kubernetes exceptions. Lower disruption, good starting posture.",
+      "sections": { "1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "7": true },
+      "levels": { "level_1": true, "level_2": false },
+      "tke_safe": true,
+      "disabled_controls": [],
+      "cloud_image_exceptions": true
+    },
+    "level2-tke": {
+      "label": "Level 1 + Level 2 (TKE-safe)",
+      "description": "Full Level 1 and Level 2, with Kubernetes exceptions. Highest hardening that still boots and joins TKE.",
+      "sections": { "1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "7": true },
+      "levels": { "level_1": true, "level_2": true },
+      "tke_safe": true,
+      "disabled_controls": [],
+      "cloud_image_exceptions": true
+    },
+    "phase1-section1": {
+      "label": "Phase 1 — Section 1 only",
+      "description": "Filesystem/SELinux/crypto only. Matches the incremental rollout phase; useful for early validation.",
+      "sections": { "1": true, "2": false, "3": false, "4": false, "5": false, "6": false, "7": false },
+      "levels": { "level_1": true, "level_2": true },
+      "tke_safe": true,
+      "disabled_controls": [],
+      "cloud_image_exceptions": true
+    },
+    "custom": {
+      "label": "Custom",
+      "description": "Start from all sections on + TKE-safe, then the UI lets the user toggle individual controls. Dangerous (breaking) controls are guarded.",
+      "sections": { "1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "7": true },
+      "levels": { "level_1": true, "level_2": true },
+      "tke_safe": true,
+      "disabled_controls": [],
+      "cloud_image_exceptions": true
+    }
+  }
+}
