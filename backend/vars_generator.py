@@ -136,7 +136,14 @@ def build_vars(selection: dict, distro: str) -> dict:
     # General build settings.
     v["os_check"] = True
     v[f"{prefix}_uses_root"] = True
-    v["skip_reboot"] = True
+    # skip_reboot=false lets the ansible-lockdown role reboot during the build
+    # so reboot-dependent controls — notably the auditd rules (written to
+    # /etc/audit/rules.d/ then loaded via augenrules after reboot) — actually
+    # become active in the snapshot. With skip_reboot=true the audit rules were
+    # written but never loaded, so OpenSCAP failed the whole auditd section.
+    # The role manages the reboot via Ansible (waits for the host to return),
+    # so Packer's ansible provisioner survives it. Overridable per selection.
+    v["skip_reboot"] = bool(selection.get("skip_reboot", False))
     v["run_audit"] = selection.get("run_audit", False)
 
     # Section toggles.
