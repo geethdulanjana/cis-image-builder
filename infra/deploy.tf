@@ -14,14 +14,15 @@
 
 locals {
   deploy_script = templatefile("${path.module}/templates/deploy-platform.sh.tftpl", {
-    repo_url          = var.app_repo_url
-    deploy_ref        = var.deploy_ref
-    deploy_run_id     = var.deploy_run_id
-    app_dir           = var.app_dir
-    app_port          = var.app_port
-    cis_base_image_id = var.packer_source_image_id
-    tencent_region    = var.region
-    cis_auth_token    = var.cis_auth_token
+    repo_url             = var.app_repo_url
+    deploy_ref           = var.deploy_ref
+    deploy_run_id        = var.deploy_run_id
+    app_dir              = var.app_dir
+    app_port             = var.app_port
+    cis_base_image_id    = var.packer_source_image_id
+    tencent_region       = var.region
+    token_secret_name    = module.auth_token_secret.secret_name
+    token_secret_version = module.auth_token_secret.version_id
   })
 }
 

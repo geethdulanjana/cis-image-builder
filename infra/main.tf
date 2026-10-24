@@ -22,6 +22,10 @@ terraform {
       source  = "tencentcloudstack/tencentcloud"
       version = "~> 1.83"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.5"
+    }
   }
 
   # Remote state in the shared COS bucket. A distinct prefix keeps this env's

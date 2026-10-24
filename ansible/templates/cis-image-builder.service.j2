@@ -29,12 +29,53 @@ Environment=CIS_BASE_IMAGE_ID={{ cis_base_image_id }}
 
 # Region used for image deletion / validation via tccli.
 Environment=TENCENTCLOUD_REGION={{ tencent_region }}
+# Disable HashiCorp checkpoint calls from packer (no outbound version pings).
+Environment=CHECKPOINT_DISABLE=1
 
 ExecStart=/usr/bin/env python3 -m uvicorn app:app --host 0.0.0.0 --port {{ app_port }}
 
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
+
+# ── Service hardening (systemd sandbox) ───────────────────────────────────────
+# The app runs as root because it shells out to packer/tccli/ansible and reads
+# the CAM instance-metadata creds. We keep root but lock down the sandbox so a
+# compromise of the app has limited reach on the host.
+
+# No privilege escalation beyond what the unit already has.
+NoNewPrivileges=true
+
+# Read-only root filesystem; only the paths below are writable. /root is kept
+# writable because packer stores its plugin cache under root's home ($HOME); the
+# pipeline, app, and state dirs are where the app + packer write artifacts.
+ProtectSystem=strict
+ReadWritePaths={{ state_dir }} {{ pipeline_dir }} {{ app_dir }} /root
+
+# Private, ephemeral /tmp. ProtectHome is left off because packer needs /root.
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+
+# Restrict kernel/namespace surface.
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RemoveIPC=true
+
+# Only allow the address families the app + tccli/packer need.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Syscall allow-listing: common service set (covers python/network/exec).
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

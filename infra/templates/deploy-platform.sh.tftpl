@@ -6,7 +6,7 @@
 # runs deploy-platform.yml locally to (re)deploy the cis-image-builder app.
 #
 # Rendered by: cis-image-builder/infra/deploy.tf (templatefile).
-# The auth token is passed via env (not argv) so it doesn't show in `ps`.
+# The auth token is fetched from SSM at runtime, never embedded here.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 export HOME=/root
@@ -17,9 +17,21 @@ DEPLOY_REF="${deploy_ref}"
 APP_DIR="${app_dir}"
 RUN_ID="${deploy_run_id}"   # changes to force re-run; not otherwise used
 
-# Auth token is rendered in by Terraform (the TAT command content is not
-# world-readable and the token already lives in TF state).
-CIS_AUTH_TOKEN="${cis_auth_token}"
+# Auth token is fetched from SSM AT DEPLOY TIME (not embedded in this command).
+# The builder's CAM role has ssm:GetSecretValue. This keeps the token out of the
+# TAT command content and out of the rendered script.
+TOKEN_SECRET_NAME="${token_secret_name}"
+TOKEN_SECRET_VERSION="${token_secret_version}"
+echo "fetching app token from SSM ($TOKEN_SECRET_NAME:$TOKEN_SECRET_VERSION)"
+CIS_AUTH_TOKEN="$(tccli ssm GetSecretValue \
+  --region "${tencent_region}" \
+  --SecretName "$TOKEN_SECRET_NAME" \
+  --VersionId "$TOKEN_SECRET_VERSION" \
+  --output json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("SecretString",""))')"
+if [ -z "$CIS_AUTH_TOKEN" ]; then
+  echo "ERROR: could not fetch app token from SSM — aborting deploy" >&2
+  exit 1
+fi
 
 echo "=== deploy cis-image-builder (ref=$DEPLOY_REF run=$RUN_ID) $(date) ==="
 

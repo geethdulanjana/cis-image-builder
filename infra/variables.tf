@@ -150,11 +150,14 @@ variable "app_dir" {
   default     = "/root/cis-image-builder"
 }
 
-variable "cis_auth_token" {
-  description = "Shared API token for the app (CIS_AUTH_TOKEN). Empty disables auth — keep set for the public CLB. Sensitive."
+variable "token_version" {
+  description = <<EOT
+Version label for the app auth token, e.g. "v1". BUMP THIS to rotate: a new
+random token is generated, stored as a new SSM version, and the next deploy
+picks it up. The SSM secret name's VersionId tracks this value.
+EOT
   type        = string
-  default     = ""
-  sensitive   = true
+  default     = "v1"
 }
 
 variable "clb_listen_port" {
