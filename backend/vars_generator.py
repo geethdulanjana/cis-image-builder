@@ -181,6 +181,15 @@ def build_vars(selection: dict, distro: str) -> dict:
     if tke_safe:
         v.update(tke_exceptions(prefix))
 
+    # BUILD-SAFETY (applied last, always): defer disabling root SSH login
+    # (control 5.1.20) during the build. The ansible-lockdown role disables
+    # PermitRootLogin in Section 5, BEFORE the post-play reboot. Packer connects
+    # as root, so after the reboot it can no longer reconnect ("unable to
+    # authenticate") and the build fails. We skip 5.1.20 here and the Packer
+    # template sets `PermitRootLogin no` as the final step before snapshot, so
+    # the shipped image is still compliant while the build survives the reboot.
+    v[f"{prefix}_rule_5_1_20"] = False
+
     return v
 
 
