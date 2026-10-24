@@ -79,7 +79,12 @@ def tke_exceptions(prefix: str) -> dict:
     return {
         f"{prefix}_is_router": True,
         f"{prefix}_ipv6_required": True,
-        f"{prefix}_firewall": "none",
+        # Skip host firewall management (TKE uses the cloud SG). The role guards
+        # the firewall package install with `<prefix>_firewall is not none`, i.e.
+        # it only skips when the value is YAML null — NOT the string "none".
+        # Emitting the string "none" makes the role try `dnf install none`
+        # ("No package none available"). So this MUST be None -> rendered as `~`.
+        f"{prefix}_firewall": None,
         f"{prefix}_rule_1_1_2_4_2": False,
         f"{prefix}_rule_1_1_2_4_3": False,
         f"{prefix}_selinux_disable": False,
@@ -188,6 +193,8 @@ def _cid_to_var(prefix: str, cid: str) -> str:
 
 
 def _yaml_scalar(val) -> str:
+    if val is None:
+        return "~"  # YAML null — role guards use `is not none` to skip tasks
     if isinstance(val, bool):
         return "true" if val else "false"
     if isinstance(val, str):
