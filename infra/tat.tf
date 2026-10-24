@@ -76,5 +76,7 @@ resource "tencentcloud_tat_invocation_invoke_attachment" "render_pkrvars" {
     replace_triggered_by = [terraform_data.pkrvars_hash]
   }
 
-  depends_on = [module.cvm]
+  # Render pkrvars AFTER the pipeline is synced, so the latest packer templates
+  # are present on the builder before we write the pkrvars into them.
+  depends_on = [module.cvm, tencentcloud_tat_invocation_invoke_attachment.sync_pipeline]
 }

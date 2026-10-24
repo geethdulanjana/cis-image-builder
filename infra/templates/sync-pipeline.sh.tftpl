@@ -1,0 +1,72 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# sync-pipeline.sh  (executed on the builder via TAT — no SSH)
+#
+# Keeps /opt/cis-pipeline (the Packer + Ansible CIS pipeline) in sync with the
+# rhel-cis-official git repo. Replaces hand-copying pipeline changes.
+#
+# Safe against the runtime-rendered files: variables.auto.pkrvars.hcl and
+# ansible/group_vars/all.yml are GITIGNORED in the repo, so `git reset --hard`
+# (which only touches TRACKED files) never clobbers them. The render-pkrvars
+# TAT flow and this sync therefore don't fight each other.
+#
+# Rendered by: cis-image-builder/infra/pipeline-sync.tf (templatefile).
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+export HOME=/root
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+REPO_URL="${repo_url}"
+PIPELINE_REF="${pipeline_ref}"
+PIPELINE_DIR="${pipeline_dir}"
+RUN_ID="${pipeline_run_id}"   # changes to force re-run; not otherwise used
+
+echo "=== sync cis-pipeline (ref=$PIPELINE_REF run=$RUN_ID) $(date) ==="
+
+command -v git >/dev/null 2>&1 || dnf install -y git
+
+# Preserve runtime-rendered files across the reset, belt-and-suspenders (they're
+# gitignored, so reset won't touch them, but guard in case they were ever
+# tracked on an old checkout).
+BACKUP="$(mktemp -d)"
+for f in packer/variables.auto.pkrvars.hcl ansible/group_vars/all.yml; do
+  if [ -f "$PIPELINE_DIR/$f" ]; then
+    mkdir -p "$BACKUP/$(dirname "$f")"
+    cp -a "$PIPELINE_DIR/$f" "$BACKUP/$f"
+  fi
+done
+
+# Adopt the existing dir in place (same safe pattern as the app deploy):
+#   1. already a git repo  -> fetch + hard reset
+#   2. dir exists, NOT git -> git init + remote + reset
+#   3. dir absent          -> clone
+if [ -d "$PIPELINE_DIR/.git" ]; then
+  echo "pipeline repo present — fetching"
+  git -C "$PIPELINE_DIR" remote set-url origin "$REPO_URL" 2>/dev/null || git -C "$PIPELINE_DIR" remote add origin "$REPO_URL"
+  git -C "$PIPELINE_DIR" fetch --all --prune
+  git -C "$PIPELINE_DIR" checkout -f "$PIPELINE_REF"
+  git -C "$PIPELINE_DIR" reset --hard "origin/$PIPELINE_REF" 2>/dev/null || git -C "$PIPELINE_DIR" reset --hard "$PIPELINE_REF"
+elif [ -d "$PIPELINE_DIR" ]; then
+  echo "dir exists but is not a git repo — adopting in place"
+  git -C "$PIPELINE_DIR" init
+  git -C "$PIPELINE_DIR" remote add origin "$REPO_URL" 2>/dev/null || git -C "$PIPELINE_DIR" remote set-url origin "$REPO_URL"
+  git -C "$PIPELINE_DIR" fetch --all --prune
+  git -C "$PIPELINE_DIR" checkout -f "$PIPELINE_REF"
+  git -C "$PIPELINE_DIR" reset --hard "origin/$PIPELINE_REF"
+else
+  echo "cloning fresh"
+  git clone "$REPO_URL" "$PIPELINE_DIR"
+  git -C "$PIPELINE_DIR" checkout -f "$PIPELINE_REF"
+fi
+
+# Restore the runtime-rendered files if the reset somehow removed them.
+for f in packer/variables.auto.pkrvars.hcl ansible/group_vars/all.yml; do
+  if [ ! -f "$PIPELINE_DIR/$f" ] && [ -f "$BACKUP/$f" ]; then
+    echo "restoring runtime file $f"
+    mkdir -p "$PIPELINE_DIR/$(dirname "$f")"
+    cp -a "$BACKUP/$f" "$PIPELINE_DIR/$f"
+  fi
+done
+rm -rf "$BACKUP"
+
+echo "=== pipeline synced to $(git -C "$PIPELINE_DIR" rev-parse --short HEAD) ==="

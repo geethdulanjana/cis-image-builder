@@ -150,6 +150,31 @@ variable "app_dir" {
   default     = "/root/cis-image-builder"
 }
 
+# ─── PIPELINE SYNC (rhel-cis-official -> /opt/cis-pipeline via TAT) ────────────
+variable "pipeline_repo_url" {
+  description = "Git URL of the CIS pipeline repo (packer + ansible) synced onto the builder."
+  type        = string
+  default     = "https://github.com/geethdulanjana/rhel-cis-official.git"
+}
+
+variable "pipeline_ref" {
+  description = "Git ref (branch/tag/commit) of the pipeline to sync."
+  type        = string
+  default     = "main"
+}
+
+variable "pipeline_run_id" {
+  description = "Bump this (any new value) to force a pipeline re-sync without changing the ref."
+  type        = string
+  default     = "1"
+}
+
+variable "pipeline_dir" {
+  description = "Directory on the builder where the CIS pipeline lives (Packer reads pkrvars here)."
+  type        = string
+  default     = "/opt/cis-pipeline"
+}
+
 variable "token_version" {
   description = <<EOT
 Version label for the app auth token, e.g. "v1". BUMP THIS to rotate: a new
