@@ -976,18 +976,18 @@ def stream_validation(validation_id: str, token: str = Query(default="")):
 
 @app.get("/api/validations/{validation_id}/audit/report")
 def get_validation_report(validation_id: str, token: str = Query(default="")):
-    """Serve the OpenSCAP HTML report for a validation."""
+    """Redirect to the OpenSCAP HTML report (uploaded to COS during validation)."""
     if AUTH_TOKEN and token and token != AUTH_TOKEN:
         raise HTTPException(status_code=401, detail="invalid auth token")
     v = _load_validations()["validations"].get(validation_id)
     if not v:
         raise HTTPException(status_code=404, detail="validation not found")
     a = v.get("audit") or {}
-    rp = a.get("report_path")
-    if not rp or not os.path.exists(rp):
+    url = a.get("report_url")
+    if not url:
         raise HTTPException(status_code=404, detail="no report for this validation")
-    return FileResponse(rp, media_type="text/html",
-                        filename=f"openscap-validation-{validation_id}.html")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
 
 
 @app.post("/api/validations/{validation_id}/cancel", dependencies=[Depends(require_auth)])
@@ -995,15 +995,13 @@ def cancel_validation(validation_id: str):
     v = _load_validations()["validations"].get(validation_id)
     if not v:
         raise HTTPException(status_code=404, detail="validation not found")
-    if not validation_runner.is_running(validation_id):
+    if v.get("status") not in ("queued", "preparing", "running", "canceling"):
         raise HTTPException(status_code=409, detail="validation is not running")
 
     def _mark(status):
         _upsert_validation({"validation_id": validation_id, "status": status})
 
-    ok = validation_runner.cancel_validation(validation_id, mark_status_cb=_mark)
-    if not ok:
-        raise HTTPException(status_code=409, detail="could not cancel (already finished?)")
+    validation_runner.cancel_validation(validation_id, mark_status_cb=_mark)
     return {"validation_id": validation_id, "status": "canceling"}
 
 
