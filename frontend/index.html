@@ -408,7 +408,7 @@ async function refreshBuilds(){
       const running=RUNNING.has(b.status);
       const when=fmtLocal(b.created_at);
       const dur=fmtDuration(b.started_at, b.finished_at, running);
-      let act=`<a class="act" href="#" data-log="${b.build_id}">log</a><a class="act" href="#" data-man="${b.build_id}">manifest</a>`;
+      let act=`<a class="act" href="#" data-log="${b.build_id}">log</a><a class="act" href="#" data-dllog="${b.build_id}">download log</a><a class="act" href="#" data-man="${b.build_id}">manifest</a>`;
       if(b.audit_verified&&b.audit_verified.available) act+=`<a class="act" href="#" data-scap="${b.build_id}" data-kind="verified">SCAP (verified)</a>`;
       if(b.audit&&b.audit.available) act+=`<a class="act" href="#" data-scap="${b.build_id}" data-kind="preliminary">SCAP (prelim)</a>`;
       if(running) act+=`<a class="act danger" href="#" data-cancel="${b.build_id}">cancel</a>`;
@@ -428,6 +428,7 @@ async function refreshBuilds(){
         <td class="status ${b.status}">${b.status}</td><td>${score}</td><td class="reason">${esc(b.reason)||""}</td>
         <td class="imgid">${b.image_id||"—"}</td><td>${b.applied_count!=null?b.applied_count:"—"}</td><td>${act}</td>`;
       tr.querySelector("[data-log]").onclick=(e)=>{e.preventDefault();showLog(b.build_id);};
+      tr.querySelector("[data-dllog]").onclick=(e)=>{e.preventDefault();downloadBuildLog(b.build_id);};
       tr.querySelector("[data-man]").onclick=(e)=>{e.preventDefault();showManifest(b.build_id);};
       tr.querySelectorAll("[data-scap]").forEach(sa=>sa.onclick=(e)=>{e.preventDefault();openScapReport(b.build_id, sa.dataset.kind);});
       const ca=tr.querySelector("[data-cancel]"); if(ca) ca.onclick=(e)=>{e.preventDefault();cancelBuild(b.build_id);};
@@ -442,6 +443,8 @@ async function cancelBuild(id){ if(!confirm("Cancel this running build?"))return
   try{ const r=await jpost(`/api/builds/${id}/cancel`,{}); if(!r.ok){toast("Cancel failed: "+await r.text());return;} toast("Canceling "+id); refreshBuilds(); }catch(e){toast("Cancel failed: "+e.message);} }
 async function deleteImage(imageId){ if(!confirm(`Delete Tencent image ${imageId}? Permanent.`))return;
   try{ const r=await jdel(`/api/images/${imageId}`); if(!r.ok){toast("Delete failed: "+await r.text());return;} toast("Deleted "+imageId); refreshBuilds(); }catch(e){toast("Delete failed: "+e.message);} }
+// Download the FULL packer build log (token in query so a direct link works).
+function downloadBuildLog(id){ const u=`${API}/api/builds/${id}/log/download?token=${encodeURIComponent(tok())}`; window.open(u,"_blank"); }
 
 // ── Validations (end-to-end image boot + health + OpenSCAP) ───────────────────
 async function startValidation(imageId, label, distro){

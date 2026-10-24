@@ -592,6 +592,25 @@ def get_build_log(build_id: str, tail: int = 200):
     return "".join(lines[-tail:])
 
 
+@app.get("/api/builds/{build_id}/log/download")
+def download_build_log(build_id: str, token: str = Query(default="")):
+    """Download the FULL Packer build log as a file attachment.
+
+    Uses a `token` query param (not X-Auth-Token) so a plain browser download
+    link works — an anchor can't set custom headers."""
+    if AUTH_TOKEN and token != AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="missing or invalid auth token")
+    store = _load_store()
+    b = store["builds"].get(build_id)
+    if not b:
+        raise HTTPException(status_code=404, detail="build not found")
+    log_path = b.get("log_path")
+    if not log_path or not os.path.exists(log_path):
+        raise HTTPException(status_code=404, detail="no log for this build")
+    return FileResponse(log_path, media_type="text/plain",
+                        filename=f"build-{build_id}.log")
+
+
 @app.get("/api/builds/{build_id}/audit", dependencies=[Depends(require_auth)])
 def get_build_audit(build_id: str):
     """OpenSCAP audit summary for a build (score, pass/fail counts)."""
