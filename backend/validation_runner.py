@@ -214,7 +214,11 @@ def run_validation(validation_id: str, image_id: str, on_update=None,
     # paths resolve (same as run_postboot_validation).
     net_vars = _read_main_pkrvars()
     cmd = ["packer", "build", "-var", f"hardened_image_id={image_id}"]
-    for k in ("region", "zone", "instance_type", "vpc_id", "subnet_id", "security_group_id"):
+    # Pass network + governance vars from the main pkrvars so the transient
+    # validation CVM/image carry the mandatory dialog:* tags (a CAM policy
+    # denies resource creation when dialog:CxoName is absent).
+    for k in ("region", "zone", "instance_type", "vpc_id", "subnet_id",
+              "security_group_id", "environment", "project"):
         if net_vars.get(k):
             cmd += ["-var", f"{k}={net_vars[k]}"]
     cmd.append(validate_dir)
