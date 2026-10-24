@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 """
-validation_runner.py — end-to-end validation of a hardened image via TAT.
+validation_runner.py — end-to-end validation of a hardened image via SSH.
 
-The CIS-hardened image blocks root SSH, so the Packer/SSH approach cannot log
-in. Instead this uses Tencent Cloud APIs + TAT (the hardened image ships the TAT
-agent, installed during the build):
+The CIS-hardened image blocks ROOT ssh and (in practice) TAT didn't come online,
+so validation uses a baked, key-only, non-root sudo user 'cisval' that the build
+puts into the image (scripts/06-add-validation-user.sh). The matching private
+key lives in SSM (the Terraform-generated builder keypair).
 
-  1. tccli cvm RunInstances   -> boot a throwaway CVM from the chosen image
-  2. poll DescribeInstances   -> wait for RUNNING
-  3. poll tat DescribeAutomationAgentStatus -> wait for the TAT agent online
-  4. tat InvokeCommand (reboot) -> activate reboot-dependent CIS controls
-  5. wait for agent back online
-  6. tat InvokeCommand (health + OpenSCAP audit) -> capture stdout markers
-  7. parse VAL_SCORE / VAL_PASS / VAL_FAIL / HEALTH markers
+Flow (no root login, no TAT dependency):
+  1. tccli cvm RunInstances       -> boot a throwaway CVM from the image
+  2. poll DescribeInstances       -> wait RUNNING + get private IP
+  3. fetch private key from SSM   -> write a temp key file
+  4. ssh cisval@ip                -> wait for SSH to answer
+  5. sudo reboot; reconnect       -> activate reboot-dependent CIS controls
+  6. health smoke + OpenSCAP      -> over ssh/sudo; parse markers
+  7. scp report.html to builder   -> served via the report endpoint
   8. tccli cvm TerminateInstances -> ALWAYS tear down (finally)
 
-No SSH anywhere, and no transient image is created (we don't snapshot), so
-there's nothing to delete and no CreateImage tag-policy concern.
-
-Runs ON the builder CVM (needs tccli + the CAM role). Import-safe; use dry_run
-for local testing.
+Runs ON the builder CVM (needs tccli + ssh/scp + the CAM role). No snapshot
+image is created. Import-safe; use dry_run for local testing.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -36,16 +38,17 @@ from build_runner import PIPELINE_DIR, refresh_credentials, _read_main_pkrvars
 
 LOG_DIR = os.environ.get("CIS_BUILD_LOG_DIR", os.path.join(PIPELINE_DIR, "logs"))
 REGION = os.environ.get("TENCENTCLOUD_REGION", "ap-singapore")
+VAL_USER = os.environ.get("CIS_VAL_USER", "cisval")
+# SSM secret holding the PEM private key (same keypair baked into the image).
+VAL_KEY_SECRET = os.environ.get("CIS_VAL_KEY_SECRET", "cis-platform-shared-builder-ssh-key")
+VAL_KEY_VERSION = os.environ.get("CIS_VAL_KEY_VERSION", "v1")
+# Where validation OpenSCAP reports are stored on the builder (served by API).
+VAL_REPORT_DIR = os.environ.get(
+    "CIS_VAL_REPORT_DIR", os.path.join(PIPELINE_DIR, "audit-results", "validations"))
 
-# Optional COS destination for the OpenSCAP HTML report (base URL + optional
-# presigned PUT). Set via env on the app service when COS is wired.
-VAL_COS_BASE = os.environ.get("CIS_VAL_COS_BASE", "").rstrip("/")  # https://<bucket>.cos.<region>.myqcloud.com/validations
-VAL_COS_PUT = os.environ.get("CIS_VAL_COS_PUT", "")               # optional presigned PUT url template
-
-# Timeouts (seconds)
 RUNNING_TIMEOUT = 300
-AGENT_TIMEOUT = 300
-REBOOT_SETTLE = 60
+SSH_TIMEOUT = 300
+REBOOT_SETTLE = 45
 
 _procs_lock = threading.Lock()
 _cancelled = set()
@@ -56,7 +59,6 @@ def _utcnow():
 
 
 def _tccli(env, *args, timeout=120):
-    """Run a tccli command, return (ok, parsed_json_or_text, raw)."""
     cmd = ["tccli", *args, "--region", REGION, "--output", "json"]
     try:
         out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
@@ -73,28 +75,71 @@ def _tccli(env, *args, timeout=120):
         return True, None, raw
 
 
+def _fetch_private_key(env, log):
+    """Get the PEM private key from SSM, write to a 0600 temp file, return path."""
+    ok, data, raw = _tccli(env, "ssm", "GetSecretValue",
+                           "--SecretName", VAL_KEY_SECRET,
+                           "--VersionId", VAL_KEY_VERSION, timeout=60)
+    if not ok or not data:
+        log(f"  SSM GetSecretValue failed: {raw[:200]}")
+        return None
+    pem = data.get("SecretString") or ""
+    if not pem:
+        log("  SSM returned empty SecretString")
+        return None
+    fd, path = tempfile.mkstemp(prefix="cisval-", suffix=".pem")
+    with os.fdopen(fd, "w") as f:
+        f.write(pem if pem.endswith("\n") else pem + "\n")
+    os.chmod(path, 0o600)
+    return path
+
+
+def _ssh_base(key_path, ip):
+    return [
+        "ssh", "-i", key_path,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
+        "-o", "LogLevel=ERROR",
+        f"{VAL_USER}@{ip}",
+    ]
+
+
+def _ssh_run(key_path, ip, remote_cmd, timeout=600):
+    """Run a remote command over ssh; return (rc, output)."""
+    cmd = _ssh_base(key_path, ip) + [remote_cmd]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return out.returncode, (out.stdout or "") + (out.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, "ssh command timed out"
+
+
+def _wait_ssh(key_path, ip, log, cancelled, timeout=SSH_TIMEOUT):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cancelled():
+            return False
+        rc, _ = _ssh_run(key_path, ip, "echo __ssh_ok__", timeout=15)
+        if rc == 0:
+            return True
+        time.sleep(8)
+    return False
+
+
 def run_validation(validation_id: str, image_id: str, on_update=None,
                    dry_run: bool = False, label: str = "", distro: str = "") -> dict:
-    """Validate one hardened image end-to-end via TAT. Returns the final record."""
     os.makedirs(LOG_DIR, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_path = os.path.join(LOG_DIR, f"validation-{validation_id}-{ts}.log")
 
     record = {
-        "validation_id": validation_id,
-        "image_id": image_id,
-        "label": label or image_id,
-        "distro": distro or None,
-        "status": "preparing",
-        "log_path": log_path,
-        "created_at": _utcnow(),
-        "started_at": _utcnow(),
-        "finished_at": None,
-        "instance_id": None,
-        "health": None,
-        "audit": None,
-        "reason": None,
-        "error": None,
+        "validation_id": validation_id, "image_id": image_id,
+        "label": label or image_id, "distro": distro or None,
+        "status": "preparing", "log_path": log_path,
+        "created_at": _utcnow(), "started_at": _utcnow(), "finished_at": None,
+        "instance_id": None, "health": None, "audit": None,
+        "reason": None, "error": None,
     }
 
     def update(**kw):
@@ -143,19 +188,25 @@ def run_validation(validation_id: str, image_id: str, on_update=None,
     net = _read_main_pkrvars()
     zone = net.get("zone") or f"{REGION}-1"
     instance_type = net.get("instance_type") or "S5.MEDIUM2"
-    vpc_id = net.get("vpc_id")
-    subnet_id = net.get("subnet_id")
-    sg_id = net.get("security_group_id")
+    vpc_id, subnet_id, sg_id = net.get("vpc_id"), net.get("subnet_id"), net.get("security_group_id")
     if not (vpc_id and subnet_id and sg_id):
         update(status="failed", reason="missing network config",
-               error="vpc_id/subnet_id/security_group_id not found in pkrvars",
+               error="vpc_id/subnet_id/security_group_id not in pkrvars",
                finished_at=_utcnow())
         return record
 
+    key_path = None
     instance_id = None
     update(status="running")
     try:
-        # 1. Boot a throwaway CVM from the hardened image, with mandatory tags.
+        # 1. Fetch the SSH private key from SSM.
+        key_path = _fetch_private_key(env, log)
+        if not key_path:
+            update(status="failed", reason="could not fetch SSH key from SSM",
+                   error="SSM key fetch failed", finished_at=_utcnow())
+            return record
+
+        # 2. Boot the throwaway CVM (with mandatory dialog:* tags).
         tag_spec = [{
             "ResourceType": "instance",
             "Tags": [
@@ -172,18 +223,14 @@ def run_validation(validation_id: str, image_id: str, on_update=None,
                 {"Key": "Purpose", "Value": "cis-validation-DELETE-ME"},
             ],
         }]
-        placement = {"Zone": zone}
-        vpc = {"VpcId": vpc_id, "SubnetId": subnet_id}
-        sys_disk = {"DiskType": "CLOUD_SSD", "DiskSize": 50}
         log(f"RunInstances: image={image_id} type={instance_type} zone={zone}")
         ok, data, raw = _tccli(
             env, "cvm", "RunInstances",
-            "--ImageId", image_id,
-            "--InstanceType", instance_type,
-            "--Placement", json.dumps(placement),
-            "--VirtualPrivateCloud", json.dumps(vpc),
+            "--ImageId", image_id, "--InstanceType", instance_type,
+            "--Placement", json.dumps({"Zone": zone}),
+            "--VirtualPrivateCloud", json.dumps({"VpcId": vpc_id, "SubnetId": subnet_id}),
             "--SecurityGroupIds", json.dumps([sg_id]),
-            "--SystemDisk", json.dumps(sys_disk),
+            "--SystemDisk", json.dumps({"DiskType": "CLOUD_SSD", "DiskSize": 50}),
             "--InstanceCount", "1",
             "--InstanceName", f"cis-validate-{validation_id}",
             "--TagSpecification", json.dumps(tag_spec),
@@ -203,48 +250,67 @@ def run_validation(validation_id: str, image_id: str, on_update=None,
         update(instance_id=instance_id)
         log(f"booted instance {instance_id}")
 
-        # 2. Wait for RUNNING.
-        if not _wait_running(env, instance_id, log, cancelled):
+        # 3. Wait RUNNING + get private IP.
+        ip = _wait_running_ip(env, instance_id, log, cancelled)
+        if not ip:
             update(status="failed", reason="instance did not reach RUNNING",
-                   error="timeout waiting for RUNNING", finished_at=_utcnow())
+                   error="timeout waiting for RUNNING/IP", finished_at=_utcnow())
             return record
-        log("instance RUNNING")
+        log(f"instance RUNNING at {ip}")
 
-        # 3. Wait for the TAT agent online.
-        if not _wait_agent(env, instance_id, log, cancelled):
-            update(status="failed", reason="TAT agent never came online",
-                   error="is the agent baked into the image?", finished_at=_utcnow())
+        # 4. Wait for SSH as cisval.
+        if not _wait_ssh(key_path, ip, log, cancelled):
+            update(status="failed", reason="SSH never came up (cisval)",
+                   error="is the cisval user baked into the image?",
+                   finished_at=_utcnow())
             return record
-        log("TAT agent online")
+        log("SSH up as cisval")
 
-        # 4. Reboot to activate reboot-dependent CIS controls.
-        log("rebooting via TAT to activate reboot-dependent controls")
-        _tat_run(env, instance_id, "sudo systemctl reboot || sudo reboot || true",
-                 log, timeout=60)
+        # 5. Reboot to activate reboot-dependent controls, then reconnect.
+        log("rebooting to activate reboot-dependent controls")
+        _ssh_run(key_path, ip, "sudo systemctl reboot || sudo reboot || true", timeout=30)
         time.sleep(REBOOT_SETTLE)
-        if not _wait_agent(env, instance_id, log, cancelled):
-            update(status="failed", reason="agent did not return after reboot",
-                   error="post-reboot agent timeout", finished_at=_utcnow())
+        if not _wait_ssh(key_path, ip, log, cancelled):
+            update(status="failed", reason="SSH did not return after reboot",
+                   error="post-reboot ssh timeout", finished_at=_utcnow())
             return record
-        log("agent back after reboot")
+        log("SSH back after reboot")
 
-        # 5. Health smoke-check via TAT.
-        health_cmd = (
+        # 6. Health smoke-check.
+        rc, hout = _ssh_run(key_path, ip,
             'echo HEALTH system_running=$(systemctl is-system-running 2>/dev/null || echo unknown); '
             'echo HEALTH failed_units=$(systemctl list-units --state=failed --no-legend --plain 2>/dev/null | wc -l); '
-            'echo HEALTH uptime="$(uptime -p 2>/dev/null || uptime)"'
-        )
-        hout = _tat_run(env, instance_id, health_cmd, log, timeout=90) or ""
+            'echo HEALTH uptime="$(uptime -p 2>/dev/null || uptime)"', timeout=60)
+        log("  " + hout.replace("\n", "\n  "))
         health = _parse_health(hout)
         update(health=health)
 
-        # 6. OpenSCAP audit via TAT. The audit script lives in the hardened image?
-        #    No — it is not in the image. Ship it inline. The hardened image has
-        #    oscap + ssg baked in (same package set as the builder base).
-        audit_script = _audit_script_inline(validation_id)
-        log("running OpenSCAP audit via TAT (several minutes)")
-        aout = _tat_run(env, instance_id, audit_script, log, timeout=1200) or ""
+        # 7. OpenSCAP audit (sudo; writes to /var/log/openscap).
+        log("running OpenSCAP audit over ssh (several minutes)")
+        rc, aout = _ssh_run(key_path, ip, "sudo bash -c " + _shq(_audit_script()), timeout=1500)
+        for line in aout.splitlines():
+            log("  " + line)
         audit = _parse_audit(aout)
+
+        # 8. Pull the HTML report back to the builder (served by the API).
+        os.makedirs(VAL_REPORT_DIR, exist_ok=True)
+        dest = os.path.join(VAL_REPORT_DIR, f"{validation_id}.html")
+        scp = ["scp", "-i", key_path, "-o", "StrictHostKeyChecking=no",
+               "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+               f"{VAL_USER}@{ip}:/tmp/openscap-report.html", dest]
+        try:
+            # copy report to a user-readable path first (sudo), then scp
+            _ssh_run(key_path, ip, "sudo cp /var/log/openscap/report.html /tmp/openscap-report.html 2>/dev/null; "
+                                   "sudo chmod 644 /tmp/openscap-report.html 2>/dev/null || true", timeout=30)
+            r = subprocess.run(scp, capture_output=True, text=True, timeout=120)
+            if r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 0:
+                audit["available"] = True
+                audit["report_path"] = dest
+                log(f"report saved: {dest}")
+            else:
+                log(f"  report scp failed: {(r.stderr or '').strip()[:200]}")
+        except Exception as e:  # noqa: BLE001
+            log(f"  report fetch error: {e}")
         update(audit=audit)
 
         healthy = health.get("healthy", False)
@@ -266,121 +332,51 @@ def run_validation(validation_id: str, image_id: str, on_update=None,
                error=str(e), finished_at=_utcnow())
         return record
     finally:
-        # ALWAYS terminate the throwaway CVM.
         if instance_id:
             log(f"terminating validation instance {instance_id}")
             ok, _, raw = _tccli(env, "cvm", "TerminateInstances",
                                 "--InstanceIds", json.dumps([instance_id]), timeout=120)
             log("terminated" if ok else f"WARNING: terminate failed: {raw[:200]}")
+        if key_path and os.path.exists(key_path):
+            try:
+                os.remove(key_path)
+            except OSError:
+                pass
         with _procs_lock:
             _cancelled.discard(validation_id)
 
 
-def _wait_running(env, instance_id, log, cancelled):
+def _wait_running_ip(env, instance_id, log, cancelled):
     deadline = time.time() + RUNNING_TIMEOUT
     while time.time() < deadline:
         if cancelled():
-            return False
+            return None
         ok, data, _ = _tccli(env, "cvm", "DescribeInstances",
                              "--InstanceIds", json.dumps([instance_id]), timeout=60)
         if ok and data:
             iset = data.get("InstanceSet") or []
             if iset:
                 state = iset[0].get("InstanceState")
-                if state == "RUNNING":
-                    return True
-                log(f"  instance state: {state}")
+                ips = iset[0].get("PrivateIpAddresses") or []
+                if state == "RUNNING" and ips:
+                    return ips[0]
+                log(f"  state={state} ips={ips}")
         time.sleep(8)
-    return False
+    return None
 
 
-def _wait_agent(env, instance_id, log, cancelled):
-    deadline = time.time() + AGENT_TIMEOUT
-    while time.time() < deadline:
-        if cancelled():
-            return False
-        ok, data, _ = _tccli(env, "tat", "DescribeAutomationAgentStatus",
-                             "--InstanceIds", json.dumps([instance_id]), timeout=60)
-        if ok and data:
-            aset = data.get("AutomationAgentSet") or []
-            if aset and aset[0].get("AgentStatus") == "Online":
-                return True
-        time.sleep(8)
-    return False
+def _shq(s: str) -> str:
+    """Single-quote a string for safe use inside: sudo bash -c <this>."""
+    return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
-def _tat_run(env, instance_id, content, log, timeout=300):
-    """Invoke an inline shell command via TAT, wait for completion, return the
-    combined command output (stdout). Best-effort: returns '' on failure."""
-    import base64
-    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
-    ok, data, raw = _tccli(
-        env, "tat", "RunCommand",
-        "--Content", b64,
-        "--InstanceIds", json.dumps([instance_id]),
-        "--CommandType", "SHELL",
-        "--Username", "root",
-        "--Timeout", str(timeout),
-        timeout=120,
-    )
-    if not ok or not data:
-        log(f"  TAT RunCommand failed: {raw[:200]}")
-        return ""
-    invocation_id = data.get("InvocationId")
-    if not invocation_id:
-        log(f"  TAT: no InvocationId ({json.dumps(data)[:150]})")
-        return ""
-
-    # Poll the invocation task until finished, then fetch its output.
-    deadline = time.time() + timeout + 60
-    while time.time() < deadline:
-        ok, inv, _ = _tccli(env, "tat", "DescribeInvocations",
-                           "--InvocationIds", json.dumps([invocation_id]), timeout=60)
-        state = None
-        if ok and inv:
-            iset = inv.get("InvocationSet") or []
-            if iset:
-                state = iset[0].get("InvocationStatus")
-        if state in ("SUCCESS", "FAILED", "TIMEOUT", "PARTIAL_FAILED"):
-            break
-        time.sleep(6)
-
-    # Fetch task output (base64-encoded).
-    ok, tasks, _ = _tccli(env, "tat", "DescribeInvocationTasks",
-                         "--Filters", json.dumps([{"Name": "invocation-id", "Values": [invocation_id]}]),
-                         timeout=60)
-    out_text = ""
-    if ok and tasks:
-        for t in (tasks.get("InvocationTaskSet") or []):
-            res = t.get("TaskResult") or {}
-            b = res.get("Output")
-            if b:
-                try:
-                    out_text += base64.b64decode(b).decode("utf-8", "replace")
-                except Exception:  # noqa: BLE001
-                    out_text += str(b)
-    if out_text:
-        log("  --- TAT output ---")
-        for line in out_text.splitlines():
-            log("  " + line)
-    return out_text
-
-
-def _audit_script_inline(validation_id):
-    """The OpenSCAP audit as an inline script for TAT. Emits VAL_* markers on
-    stdout; optionally uploads the HTML report to COS when configured."""
-    cos_env = ""
-    if VAL_COS_BASE:
-        url = f"{VAL_COS_BASE}/{validation_id}/report.html"
-        cos_env = f'export CIS_VAL_COS_URL="{url}"\n'
-        if VAL_COS_PUT:
-            cos_env += f'export CIS_VAL_COS_PUT="{VAL_COS_PUT}"\n'
-    # Reuse the canonical audit script shipped in the pipeline on the builder;
-    # but the TARGET is the validation CVM, so we inline a self-contained scan.
-    return cos_env + r"""
+def _audit_script() -> str:
+    """Self-contained OpenSCAP scan; prints VAL_* markers; leaves report at
+    /var/log/openscap/report.html."""
+    return r"""
 set -uo pipefail
 OUT=/var/log/openscap; mkdir -p "$OUT"
-command -v oscap >/dev/null 2>&1 || sudo dnf install -y openscap-scanner scap-security-guide || true
+command -v oscap >/dev/null 2>&1 || dnf install -y openscap-scanner scap-security-guide || true
 . /etc/os-release; MAJOR="${VERSION_ID%%.*}"
 DS=""; for c in /usr/share/xml/scap/ssg/content/ssg-rhel${MAJOR}-ds.xml /usr/share/xml/scap/ssg/content/ssg-rhel${MAJOR}-ds-1.2.xml; do [ -f "$c" ] && DS="$c" && break; done
 if [ -z "$DS" ]; then echo "VAL_SCORE=0"; echo "VAL_PASS=0"; echo "VAL_FAIL=0"; echo "VAL_DONE=1"; exit 0; fi
@@ -391,18 +387,12 @@ oscap xccdf eval --profile "$PROFILE" --results "$OUT/results.xml" --report "$OU
 SCORE=$(grep -oE '<score[^>]*>[0-9.]+' "$OUT/results.xml" 2>/dev/null | grep -oE '[0-9.]+$' | head -1); [ -z "$SCORE" ] && SCORE=0
 PASS=$(grep -c '<result>pass</result>' "$OUT/results.xml" 2>/dev/null || echo 0)
 FAIL=$(grep -c '<result>fail</result>' "$OUT/results.xml" 2>/dev/null || echo 0)
-echo "VAL_SCORE=${SCORE}"; echo "VAL_PASS=${PASS}"; echo "VAL_FAIL=${FAIL}"
-if [ -n "${CIS_VAL_COS_URL:-}" ] && [ -f "$OUT/report.html" ]; then
-  if command -v coscli >/dev/null 2>&1; then coscli cp "$OUT/report.html" "$CIS_VAL_COS_URL" && echo "VAL_REPORT_URL=${CIS_VAL_COS_URL}";
-  elif [ -n "${CIS_VAL_COS_PUT:-}" ]; then curl -fsS -X PUT -T "$OUT/report.html" "$CIS_VAL_COS_PUT" && echo "VAL_REPORT_URL=${CIS_VAL_COS_URL}"; fi
-fi
-echo "VAL_DONE=1"
+echo "VAL_SCORE=${SCORE}"; echo "VAL_PASS=${PASS}"; echo "VAL_FAIL=${FAIL}"; echo "VAL_DONE=1"
 """
 
 
 def _parse_health(text: str) -> dict:
-    health = {"system_running": None, "failed_units": None, "uptime": None,
-              "ssh_back": None}
+    health = {"system_running": None, "failed_units": None, "uptime": None}
     m = re.search(r"HEALTH system_running=(\S+)", text)
     if m:
         health["system_running"] = m.group(1)
@@ -419,7 +409,7 @@ def _parse_health(text: str) -> dict:
 
 def _parse_audit(text: str) -> dict:
     out = {"available": False, "score": None, "passed": None, "failed": None,
-           "report_url": None}
+           "report_path": None}
     m = re.search(r"VAL_SCORE=([0-9.]+)", text)
     if m:
         try:
@@ -432,10 +422,6 @@ def _parse_audit(text: str) -> dict:
     m = re.search(r"VAL_FAIL=(\d+)", text)
     if m:
         out["failed"] = int(m.group(1))
-    m = re.search(r"VAL_REPORT_URL=(\S+)", text)
-    if m:
-        out["report_url"] = m.group(1)
-        out["available"] = True
     return out
 
 
@@ -448,6 +434,4 @@ def cancel_validation(validation_id: str, mark_status_cb=None) -> bool:
 
 
 def is_running(validation_id: str) -> bool:
-    # We can't easily introspect; report based on cancellation set absence is
-    # not meaningful, so the API uses the store status instead. Kept for parity.
     return False

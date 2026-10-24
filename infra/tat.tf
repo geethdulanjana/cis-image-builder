@@ -34,6 +34,7 @@ locals {
     image_description = var.packer_image_description
     tag_environment   = var.environment
     tag_project       = var.project
+    validation_pubkey = module.ssh_keypair_bastion.public_key_openssh
   })
 }
 

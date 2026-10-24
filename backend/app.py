@@ -995,18 +995,18 @@ def stream_validation(validation_id: str, token: str = Query(default="")):
 
 @app.get("/api/validations/{validation_id}/audit/report")
 def get_validation_report(validation_id: str, token: str = Query(default="")):
-    """Redirect to the OpenSCAP HTML report (uploaded to COS during validation)."""
+    """Serve the OpenSCAP HTML report pulled back from the validation CVM."""
     if AUTH_TOKEN and token and token != AUTH_TOKEN:
         raise HTTPException(status_code=401, detail="invalid auth token")
     v = _load_validations()["validations"].get(validation_id)
     if not v:
         raise HTTPException(status_code=404, detail="validation not found")
     a = v.get("audit") or {}
-    url = a.get("report_url")
-    if not url:
+    rp = a.get("report_path")
+    if not rp or not os.path.exists(rp):
         raise HTTPException(status_code=404, detail="no report for this validation")
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url)
+    return FileResponse(rp, media_type="text/html",
+                        filename=f"openscap-validation-{validation_id}.html")
 
 
 @app.post("/api/validations/{validation_id}/cancel", dependencies=[Depends(require_auth)])
