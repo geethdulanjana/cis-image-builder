@@ -122,6 +122,41 @@ variable "app_port" {
   default     = 8080
 }
 
+# ─── APP DEPLOY (Ansible via TAT) ─────────────────────────────────────────────
+variable "app_repo_url" {
+  description = "Git URL of the cis-image-builder repo the builder deploys from."
+  type        = string
+  default     = "https://github.com/geethdulanjana/cis-image-builder.git"
+}
+
+variable "deploy_ref" {
+  description = "Git ref (branch/tag/commit) to deploy. Change this (or deploy_run_id) to trigger a redeploy."
+  type        = string
+  default     = "main"
+}
+
+variable "deploy_run_id" {
+  description = <<EOT
+Bump this (any new value) to force a redeploy without changing the ref — e.g.
+to re-pull the same branch after a push. On-demand trigger for the deploy.
+EOT
+  type        = string
+  default     = "1"
+}
+
+variable "app_dir" {
+  description = "Directory on the builder where the app repo is checked out."
+  type        = string
+  default     = "/root/cis-image-builder"
+}
+
+variable "cis_auth_token" {
+  description = "Shared API token for the app (CIS_AUTH_TOKEN). Empty disables auth — keep set for the public CLB. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "clb_listen_port" {
   description = "Public port the CLB listens on."
   type        = number

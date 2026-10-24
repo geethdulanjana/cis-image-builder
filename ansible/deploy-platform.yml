@@ -1,0 +1,100 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# deploy-platform.yml — deploy/update the cis-image-builder app on the builder.
+#
+# Runs LOCALLY on the builder CVM (connection: local), invoked by TAT. Pulls the
+# repo, installs Python deps, renders the systemd unit, and restarts the
+# service. Persistent app state (build history, saved selections) is kept OUTSIDE
+# the repo so redeploys never lose it.
+#
+# Invoked by: cis-image-builder/infra/deploy.tf  (TAT command -> this playbook)
+# Override vars with -e, e.g.:
+#   ansible-playbook deploy-platform.yml \
+#     -e deploy_ref=main -e cis_auth_token=xxxx -e app_port=8080
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Deploy cis-image-builder platform
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    repo_url: "https://github.com/geethdulanjana/cis-image-builder.git"
+    deploy_ref: "main"
+    app_dir: "/root/cis-image-builder"
+    # Persistent state lives outside the repo so git/rsync never wipes it.
+    state_dir: "/var/lib/cis-image-builder"
+    app_port: 8080
+    cis_auth_token: ""          # pass via -e (from Terraform/SSM); empty = auth off
+    cis_base_image_id: ""       # keep in sync with packer source_image_id
+    tencent_region: "ap-singapore"
+    pipeline_dir: "/opt/cis-pipeline"
+    service_name: "cis-image-builder"
+
+  tasks:
+    - name: Ensure required packages are present
+      ansible.builtin.package:
+        name:
+          - git
+          - python3
+          - python3-pip
+        state: present
+      failed_when: false   # image may already have these; don't fail the deploy
+
+    - name: Ensure persistent state dir exists
+      ansible.builtin.file:
+        path: "{{ state_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Clone or update the repo at the requested ref
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: "{{ deploy_ref }}"
+        force: true
+
+    - name: Install Python dependencies
+      ansible.builtin.pip:
+        requirements: "{{ app_dir }}/backend/requirements.txt"
+        executable: pip3
+
+    - name: Render the systemd unit
+      ansible.builtin.template:
+        src: "cis-image-builder.service.j2"
+        dest: "/etc/systemd/system/{{ service_name }}.service"
+        mode: "0644"
+      notify: restart cis-image-builder
+
+    - name: Reload systemd (pick up unit changes before enable)
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and (re)start the service
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        enabled: true
+        state: restarted
+
+    - name: Wait for the app to answer on its port
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/api/status"
+        method: GET
+        status_code: [200, 401]   # 401 = up but auth required; still "healthy"
+        headers:
+          X-Auth-Token: "{{ cis_auth_token }}"
+      register: health
+      retries: 12
+      delay: 5
+      until: health.status in [200, 401]
+
+    - name: Report health
+      ansible.builtin.debug:
+        msg: "cis-image-builder is up on :{{ app_port }} (status {{ health.status }})"
+
+  handlers:
+    - name: restart cis-image-builder
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+        daemon_reload: true

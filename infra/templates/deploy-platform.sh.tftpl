@@ -1,0 +1,71 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# deploy-platform.sh  (executed on the builder via TAT — no SSH)
+#
+# Bootstraps Ansible if needed, pulls the repo so the playbook is current, then
+# runs deploy-platform.yml locally to (re)deploy the cis-image-builder app.
+#
+# Rendered by: cis-image-builder/infra/deploy.tf (templatefile).
+# The auth token is passed via env (not argv) so it doesn't show in `ps`.
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+export HOME=/root
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+REPO_URL="${repo_url}"
+DEPLOY_REF="${deploy_ref}"
+APP_DIR="${app_dir}"
+RUN_ID="${deploy_run_id}"   # changes to force re-run; not otherwise used
+
+# Auth token is rendered in by Terraform (the TAT command content is not
+# world-readable and the token already lives in TF state).
+CIS_AUTH_TOKEN="${cis_auth_token}"
+
+echo "=== deploy cis-image-builder (ref=$DEPLOY_REF run=$RUN_ID) $(date) ==="
+
+# Ensure git + an ansible-playbook are available. The builder image was built
+# with ansible-core under python3.12; fall back to installing if missing.
+command -v git >/dev/null 2>&1 || dnf install -y git
+
+if ! command -v ansible-playbook >/dev/null 2>&1; then
+  echo "ansible-playbook not found — installing ansible-core via python3.12"
+  python3.12 -m pip install --upgrade pip
+  python3.12 -m pip install "ansible-core>=2.16,<2.17"
+fi
+
+# Get the repo onto the box at the requested ref. Three cases:
+#   1. already a git repo  -> fetch + hard reset
+#   2. dir exists, NOT git -> adopt it in place (git init + remote + reset)
+#   3. dir absent          -> plain clone
+# Case 2 handles a pre-existing hand-copied /root/cis-image-builder.
+if [ -d "$APP_DIR/.git" ]; then
+  echo "repo present — fetching"
+  git -C "$APP_DIR" remote set-url origin "$REPO_URL" 2>/dev/null || git -C "$APP_DIR" remote add origin "$REPO_URL"
+  git -C "$APP_DIR" fetch --all --prune
+  git -C "$APP_DIR" checkout -f "$DEPLOY_REF"
+  git -C "$APP_DIR" reset --hard "origin/$DEPLOY_REF" 2>/dev/null || git -C "$APP_DIR" reset --hard "$DEPLOY_REF"
+elif [ -d "$APP_DIR" ]; then
+  echo "dir exists but is not a git repo — adopting in place"
+  git -C "$APP_DIR" init
+  git -C "$APP_DIR" remote add origin "$REPO_URL" 2>/dev/null || git -C "$APP_DIR" remote set-url origin "$REPO_URL"
+  git -C "$APP_DIR" fetch --all --prune
+  git -C "$APP_DIR" checkout -f "$DEPLOY_REF"
+  git -C "$APP_DIR" reset --hard "origin/$DEPLOY_REF"
+else
+  echo "cloning fresh"
+  git clone "$REPO_URL" "$APP_DIR"
+  git -C "$APP_DIR" checkout -f "$DEPLOY_REF"
+fi
+
+cd "$APP_DIR/ansible"
+
+ansible-playbook deploy-platform.yml \
+  -e "repo_url=$REPO_URL" \
+  -e "deploy_ref=$DEPLOY_REF" \
+  -e "app_dir=$APP_DIR" \
+  -e "app_port=${app_port}" \
+  -e "cis_base_image_id=${cis_base_image_id}" \
+  -e "tencent_region=${tencent_region}" \
+  -e "cis_auth_token=$CIS_AUTH_TOKEN"
+
+echo "=== deploy complete $(date) ==="

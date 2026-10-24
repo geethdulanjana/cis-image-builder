@@ -1,0 +1,7 @@
+# Force LF for files that run on Linux (shell, ansible, templates) so Windows
+# checkouts don't introduce CRLF that breaks scripts on the builder.
+*.sh      text eol=lf
+*.tftpl   text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.j2      text eol=lf

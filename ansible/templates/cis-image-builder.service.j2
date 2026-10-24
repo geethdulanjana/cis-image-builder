@@ -1,0 +1,40 @@
+# MANAGED BY ANSIBLE (deploy-platform.yml) — do not edit on the box.
+[Unit]
+Description=CIS Image Builder (RHEL10-CIS -> Tencent TKE hardened images)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ app_dir }}/backend
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+# Shared API token. Empty disables auth — keep it set for the public CLB.
+Environment=CIS_AUTH_TOKEN={{ cis_auth_token }}
+
+# Persistent app state OUTSIDE the repo so redeploys never wipe build history
+# or saved selections.
+Environment=CIS_STORE_PATH={{ state_dir }}/builds_store.json
+Environment=CIS_SELECTIONS_PATH={{ state_dir }}/saved_selections.json
+
+# Pipeline paths on the builder.
+Environment=CIS_PIPELINE_DIR={{ pipeline_dir }}
+Environment=CIS_PACKER_DIR={{ pipeline_dir }}/packer
+Environment=CIS_GROUP_VARS_PATH={{ pipeline_dir }}/ansible/group_vars/all.yml
+Environment=CIS_BUILD_LOG_DIR={{ pipeline_dir }}/logs
+
+# Base/source image id — never recorded as a build output or deletable.
+Environment=CIS_BASE_IMAGE_ID={{ cis_base_image_id }}
+
+# Region used for image deletion / validation via tccli.
+Environment=TENCENTCLOUD_REGION={{ tencent_region }}
+
+ExecStart=/usr/bin/env python3 -m uvicorn app:app --host 0.0.0.0 --port {{ app_port }}
+
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
