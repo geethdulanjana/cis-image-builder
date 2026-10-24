@@ -18,18 +18,40 @@ APP_DIR="${app_dir}"
 RUN_ID="${deploy_run_id}"   # changes to force re-run; not otherwise used
 
 # Auth token is fetched from SSM AT DEPLOY TIME (not embedded in this command).
-# The builder's CAM role has ssm:GetSecretValue. This keeps the token out of the
-# TAT command content and out of the rendered script.
+# tccli authenticates via the builder's CAM role: pull temporary creds from the
+# instance metadata service and export them (same pattern the app uses).
 TOKEN_SECRET_NAME="${token_secret_name}"
 TOKEN_SECRET_VERSION="${token_secret_version}"
+REGION="${tencent_region}"
+META_BASE="http://metadata.tencentyun.com/latest/meta-data/cam/security-credentials/"
+
+echo "fetching CAM-role credentials from instance metadata"
+ROLE="$(curl -fsS --max-time 5 "$META_BASE")"
+if [ -z "$ROLE" ]; then
+  echo "ERROR: no CAM role from metadata — is a role attached to this CVM?" >&2
+  exit 1
+fi
+CREDS="$(curl -fsS --max-time 5 "$META_BASE$ROLE")"
+export TENCENTCLOUD_SECRET_ID="$(echo "$CREDS"  | python3 -c 'import sys,json;print(json.load(sys.stdin)["TmpSecretId"])')"
+export TENCENTCLOUD_SECRET_KEY="$(echo "$CREDS" | python3 -c 'import sys,json;print(json.load(sys.stdin)["TmpSecretKey"])')"
+export TENCENTCLOUD_TOKEN="$(echo "$CREDS"      | python3 -c 'import sys,json;print(json.load(sys.stdin)["Token"])')"
+export TENCENTCLOUD_SECURITY_TOKEN="$TENCENTCLOUD_TOKEN"
+export TENCENTCLOUD_REGION="$REGION"
+
 echo "fetching app token from SSM ($TOKEN_SECRET_NAME:$TOKEN_SECRET_VERSION)"
-CIS_AUTH_TOKEN="$(tccli ssm GetSecretValue \
-  --region "${tencent_region}" \
+SSM_OUT="$(tccli ssm GetSecretValue \
+  --region "$REGION" \
   --SecretName "$TOKEN_SECRET_NAME" \
   --VersionId "$TOKEN_SECRET_VERSION" \
-  --output json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("SecretString",""))')"
+  --output json 2>&1)" || {
+    echo "ERROR: tccli GetSecretValue failed:" >&2
+    echo "$SSM_OUT" >&2
+    exit 1
+  }
+CIS_AUTH_TOKEN="$(echo "$SSM_OUT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("SecretString",""))' 2>/dev/null || true)"
 if [ -z "$CIS_AUTH_TOKEN" ]; then
-  echo "ERROR: could not fetch app token from SSM — aborting deploy" >&2
+  echo "ERROR: empty token from SSM. Raw tccli output was:" >&2
+  echo "$SSM_OUT" >&2
   exit 1
 fi
 
