@@ -37,8 +37,18 @@
   .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
   .grow { flex:1; min-width:0; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; max-width:720px; }
+  .card.wide { max-width:960px; }
   .note { color:var(--muted); font-size:12px; }
   .preset-desc { color:var(--muted); margin:8px 0 0; }
+  /* hardening mode cards */
+  .mode-cards { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .mode-card { display:flex; flex-direction:column; gap:3px; border:1px solid var(--line); border-radius:8px;
+    padding:11px 13px; cursor:pointer; background:var(--panel2); transition:border-color .12s, background .12s; }
+  .mode-card:hover { border-color:var(--muted); }
+  .mode-card input { position:absolute; opacity:0; width:0; height:0; }
+  .mode-card .mode-title { font-weight:600; }
+  .mode-card .mode-desc { color:var(--muted); font-size:12px; }
+  .mode-card:has(input:checked) { border-color:#2563eb; background:rgba(37,99,235,.12); box-shadow:0 0 0 1px #2563eb inset; }
   /* controls */
   .toolbar { position:sticky; top:0; background:var(--bg); padding-bottom:10px; z-index:5; }
   .counts { color:var(--muted); font-size:12px; }
@@ -108,7 +118,6 @@
 
 <div class="tabs">
   <div class="tab active" data-tab="build">Build</div>
-  <div class="tab" data-tab="controls">Controls</div>
   <div class="tab" data-tab="builds">Builds &amp; Logs</div>
   <div class="tab" data-tab="validate">Validate</div>
 </div>
@@ -117,24 +126,54 @@
 <div class="tabpane active" data-pane="build">
   <div class="scroll">
     <div class="card">
-      <h2>Base image &amp; distribution</h2>
+      <h2>1 · Base image &amp; distribution</h2>
       <div class="row">
         <label class="row" style="gap:6px">Distro <select id="distro"></select></label>
         <input id="baseImage" class="grow" placeholder="base image id (img-xxxx) — optional, else template default" />
       </div>
-      <h2>Preset</h2>
-      <div class="row">
-        <select id="preset"></select>
-        <label class="row" style="gap:6px"><input type="checkbox" id="tkeSafe" checked /> TKE-safe</label>
+    </div>
+
+    <div class="card">
+      <h2>2 · Hardening mode</h2>
+      <div id="modeCards" class="mode-cards">
+        <label class="mode-card"><input type="radio" name="mode" value="l1" />
+          <span class="mode-title">CIS Level 1 only</span>
+          <span class="mode-desc">Baseline hardening. Lower disruption, safe starting posture.</span></label>
+        <label class="mode-card"><input type="radio" name="mode" value="l2" />
+          <span class="mode-title">CIS Level 2 only</span>
+          <span class="mode-desc">Only the stricter Level 2 controls. For high-security targets.</span></label>
+        <label class="mode-card"><input type="radio" name="mode" value="l1l2" />
+          <span class="mode-title">CIS Level 1 + Level 2</span>
+          <span class="mode-desc">Full CIS benchmark — both levels, no exceptions.</span></label>
+        <label class="mode-card"><input type="radio" name="mode" value="tke" checked />
+          <span class="mode-title">TKE safe mode</span>
+          <span class="mode-desc">Full L1+L2 with Kubernetes exceptions so the node still joins TKE. Recommended.</span></label>
       </div>
-      <p class="preset-desc" id="presetDesc"></p>
       <div class="row" style="margin-top:14px">
         <button class="primary" id="buildBtn">Build image</button>
         <button id="previewBtn">Preview vars</button>
-        <button id="diffBtn">Diff vs preset</button>
         <span id="buildMsg" class="note"></span>
       </div>
-      <p class="note" style="margin-top:10px">Tip: fine-tune individual controls in the <b>Controls</b> tab — each one shows the exact Ansible task it runs.</p>
+    </div>
+
+    <div class="card wide">
+      <h2>3 · Controls in this build</h2>
+      <p class="note" style="margin:0 0 8px">
+        Every control the selected mode applies is listed below. Toggle any control off,
+        or click <b>Show Ansible</b> to see the exact task it runs.
+        <span class="badge breaking">breaking</span> stops node join/networking ·
+        <span class="badge caution">caution</span> may affect workloads · breaking
+        controls are locked in TKE safe mode.
+      </p>
+      <div class="toolbar">
+        <div class="row">
+          <input id="filter" class="grow" placeholder="filter by id, title, or risk (breaking/caution)…" />
+          <button id="expandAll" class="sm">⊕ expand</button>
+          <button id="collapseAll" class="sm">⊖ collapse</button>
+        </div>
+        <div class="row" style="margin-top:6px"><span class="counts" id="counts"></span></div>
+      </div>
+      <div id="sections"></div>
     </div>
 
     <div class="card">
@@ -152,27 +191,6 @@
 
     <h2>Generated group_vars (preview)</h2>
     <pre id="preview">Click "Preview vars" to see the exact generated all.yml.</pre>
-  </div>
-</div>
-
-<!-- TAB: CONTROLS -->
-<div class="tabpane" data-pane="controls">
-  <div class="scroll">
-    <div class="toolbar">
-      <div class="row">
-        <input id="filter" class="grow" placeholder="filter by id, title, or risk (breaking/caution)…" />
-        <button id="expandAll" class="sm">⊕ expand</button>
-        <button id="collapseAll" class="sm">⊖ collapse</button>
-      </div>
-      <div class="row" style="margin-top:6px"><span class="counts" id="counts"></span></div>
-    </div>
-    <div class="note" style="margin:6px 0">
-      <span class="badge breaking">breaking</span> stops node join/networking ·
-      <span class="badge caution">caution</span> may affect workloads · breaking
-      controls are locked when TKE-safe is on · click <b>Show Ansible</b> on a
-      control to see exactly what it runs.
-    </div>
-    <div id="sections"></div>
   </div>
 </div>
 
@@ -248,7 +266,7 @@
 
 <script>
 const API="";
-let catalog=null, presets=null, disabledControls=new Set();
+let catalog=null, disabledControls=new Set();
 let currentDistro="rhel10"; const detailCache={};
 const $=(id)=>document.getElementById(id);
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -271,10 +289,21 @@ async function jget(u){ const r=await fetch(API+u,{headers:authHeaders()}); if(r
 async function jpost(u,b){ const r=await fetch(API+u,{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(b)}); if(r.status===401){promptToken();throw new Error("auth");} return r; }
 async function jdel(u){ const r=await fetch(API+u,{method:"DELETE",headers:authHeaders()}); if(r.status===401){promptToken();throw new Error("auth");} return r; }
 
-// selection
-function currentSelection(){ const p=presets.presets[$("preset").value];
-  return { sections:{...p.sections}, levels:{...p.levels}, disabled_controls:[...disabledControls],
-    tke_safe:$("tkeSafe").checked, cloud_image_exceptions:p.cloud_image_exceptions!==false, distro:currentDistro }; }
+// ── Hardening modes (replace the old preset dropdown) ─────────────────────────
+// Each mode maps to CIS levels + whether the TKE exception set is applied.
+const MODES={
+  l1:   { label:"CIS Level 1 only",       levels:{level_1:true, level_2:false}, tke_safe:false },
+  l2:   { label:"CIS Level 2 only",       levels:{level_1:false,level_2:true },  tke_safe:false },
+  l1l2: { label:"CIS Level 1 + Level 2",  levels:{level_1:true, level_2:true },  tke_safe:false },
+  tke:  { label:"TKE safe mode",          levels:{level_1:true, level_2:true },  tke_safe:true  },
+};
+function currentMode(){ const el=document.querySelector('input[name="mode"]:checked'); return el?el.value:"tke"; }
+// Section toggles live locally (all on by default); user can disable individual controls.
+let sectionState={ "1":true,"2":true,"3":true,"4":true,"5":true,"6":true,"7":true };
+
+function currentSelection(){ const m=MODES[currentMode()];
+  return { sections:{...sectionState}, levels:{...m.levels}, disabled_controls:[...disabledControls],
+    tke_safe:m.tke_safe, cloud_image_exceptions:true, distro:currentDistro }; }
 function buildPayload(label){ const b={selection:currentSelection(),distro:currentDistro};
   const img=$("baseImage").value.trim(); if(img) b.base_image_id=img; if(label) b.label=label; return b; }
 
@@ -288,19 +317,16 @@ async function loadDistros(){ const d=await jget("/api/distros"); currentDistro=
 }
 async function loadCatalog(){ catalog=await jget("/api/catalog?distro="+encodeURIComponent(currentDistro)); }
 
-// presets
-function renderPresets(){ const sel=$("preset"); sel.innerHTML="";
-  for(const [k,p] of Object.entries(presets.presets)){ if(k.startsWith("_"))continue;
-    const o=document.createElement("option"); o.value=k; o.textContent=p.label; sel.appendChild(o); }
-  sel.onchange=onPresetChange; onPresetChange(); }
-function onPresetChange(){ const p=presets.presets[$("preset").value]; $("presetDesc").textContent=p.description||"";
-  disabledControls=new Set(p.disabled_controls||[]); renderSections(); }
+// mode selector — re-render controls when the hardening mode changes (the
+// breaking-control locking depends on whether the mode is TKE-safe).
+function initModes(){ document.querySelectorAll('input[name="mode"]').forEach(r=>r.onchange=()=>renderSections()); }
 
 // controls render + filter + inline detail
 function matchesFilter(c,q){ if(!q)return true; q=q.toLowerCase();
   return c.id.toLowerCase().includes(q)||(c.title||"").toLowerCase().includes(q)||(c.tke_risk||"").toLowerCase().includes(q); }
 function renderSections(){
-  const wrap=$("sections"); wrap.innerHTML=""; const tkeSafe=$("tkeSafe").checked; const sel=currentSelection();
+  if(!catalog) return;
+  const wrap=$("sections"); wrap.innerHTML=""; const tkeSafe=MODES[currentMode()].tke_safe; const sel=currentSelection();
   const q=$("filter").value.trim(); let shown=0, enabledCount=0, total=catalog.controls.length;
   for(const c of catalog.controls){ if(!disabledControls.has(c.id)&&sel.sections[c.section]!==false) enabledCount++; }
   for(const sec of catalog.sections){
@@ -337,7 +363,7 @@ function renderSections(){
   renderCounts();
   function renderCounts(){ $("counts").textContent=`${enabledCount} enabled of ${total} controls`+(q?` · ${shown} match filter`:""); }
 }
-function toggleSection(num,on){ presets.presets[$("preset").value].sections[num]=on; renderSections(); }
+function toggleSection(num,on){ sectionState[num]=on; renderSections(); }
 async function toggleDetail(id, ctlEl){
   const box=ctlEl.querySelector(`[data-detailbox="${id}"]`);
   const btn=ctlEl.querySelector("[data-detail]");
@@ -360,7 +386,6 @@ async function toggleDetail(id, ctlEl){
     box.dataset.loaded="1";
   }catch(e){ box.innerHTML=`<span class="note">No detail available.</span>`; }
 }
-$("tkeSafe").onchange=renderSections;
 let ft=null; $("filter").oninput=()=>{ clearTimeout(ft); ft=setTimeout(renderSections,150); };
 $("expandAll").onclick=()=>document.querySelectorAll(".controls").forEach(e=>e.classList.add("open"));
 $("collapseAll").onclick=()=>document.querySelectorAll(".controls").forEach(e=>e.classList.remove("open"));
@@ -370,7 +395,7 @@ $("previewBtn").onclick=async()=>{ try{ const r=await jpost("/api/preview",build
   if(!r.ok){toast("Preview failed: "+await r.text());return;} $("preview").textContent=await r.text();
 }catch(e){toast("Preview failed: "+e.message);} };
 $("buildBtn").onclick=async()=>{ $("buildBtn").disabled=true; $("buildMsg").textContent="submitting…";
-  try{ const label=presets.presets[$("preset").value].label+" ("+currentDistro+")";
+  try{ const label=MODES[currentMode()].label+" ("+currentDistro+")";
     const r=await jpost("/api/builds",buildPayload(label));
     if(r.status===409){ $("buildMsg").textContent="busy"; toast("A build is already running."); return; }
     if(!r.ok){ $("buildMsg").textContent="error"; toast("Build failed: "+await r.text()); return; }
@@ -689,29 +714,28 @@ async function refreshSavedSelections(){ try{ const data=await jget("/api/select
 $("saveSelBtn").onclick=async()=>{ const name=$("selName").value.trim(); if(!name){toast("Enter a name");return;}
   try{ const r=await jpost("/api/selections",{name,selection:currentSelection()}); if(!r.ok){toast("Save failed: "+await r.text());return;} toast("Saved '"+name+"'"); $("selName").value=""; refreshSavedSelections(); }catch(e){toast("Save failed: "+e.message);} };
 $("loadSelBtn").onclick=async()=>{ const name=$("savedSel").value; if(!name){toast("Pick a selection");return;}
-  try{ const data=await jget("/api/selections"); const item=(data.selections||{})[name]; if(!item){toast("Not found");return;} applySelection(item.selection); gotoTab("controls"); toast("Loaded '"+name+"'"); }catch(e){toast("Load failed: "+e.message);} };
+  try{ const data=await jget("/api/selections"); const item=(data.selections||{})[name]; if(!item){toast("Not found");return;} applySelection(item.selection); gotoTab("build"); toast("Loaded '"+name+"'"); }catch(e){toast("Load failed: "+e.message);} };
 $("delSelBtn").onclick=async()=>{ const name=$("savedSel").value; if(!name){toast("Pick a selection");return;} if(!confirm(`Delete saved selection '${name}'?`))return;
   try{ const r=await jdel(`/api/selections/${encodeURIComponent(name)}`); if(!r.ok){toast("Delete failed: "+await r.text());return;} toast("Deleted '"+name+"'"); refreshSavedSelections(); }catch(e){toast("Delete failed: "+e.message);} };
 function applySelection(s){ if(s.distro&&s.distro!==currentDistro){ currentDistro=s.distro; $("distro").value=s.distro; $("pillDistro").textContent=s.distro; loadCatalog().then(()=>_applySel(s)); return; } _applySel(s); }
-function _applySel(s){ if(presets.presets["custom"]){ $("preset").value="custom"; onPresetChange(); } const p=presets.presets[$("preset").value];
-  if(s.sections) p.sections={...p.sections,...s.sections}; if(s.levels) p.levels={...p.levels,...s.levels};
-  $("tkeSafe").checked=s.tke_safe!==false; disabledControls=new Set(s.disabled_controls||[]); renderSections(); }
-
-// diff
-$("diffBtn").onclick=()=>{ const base=presets.presets[$("preset").value]; const cur=currentSelection();
-  const lines=[`Diff of current selection vs preset "${base.label}":`,""];
-  for(const sec of catalog.sections){ const b=base.sections[sec.number]!==false; const c=cur.sections[sec.number]!==false; if(b!==c) lines.push(`${c?"+":"-"} Section ${sec.number} ${c?"enabled":"disabled"}`); }
-  const bd=new Set(base.disabled_controls||[]), cd=new Set(cur.disabled_controls||[]);
-  for(const id of cd) if(!bd.has(id)) lines.push(`- control ${id} disabled`);
-  for(const id of bd) if(!cd.has(id)) lines.push(`+ control ${id} re-enabled`);
-  if((base.tke_safe!==false)!==cur.tke_safe) lines.push(`${cur.tke_safe?"+":"-"} TKE-safe ${cur.tke_safe?"on":"off"}`);
-  if(lines.length===2) lines.push("(no differences — matches the preset)");
-  $("preview").innerHTML=lines.map(l=>l.startsWith("+")?`<span class="diff-add">${esc(l)}</span>`:l.startsWith("-")?`<span class="diff-del">${esc(l)}</span>`:esc(l)).join("\n");
-};
+function _applySel(s){
+  // Map a saved selection onto the closest hardening mode radio.
+  const l1=(s.levels&&s.levels.level_1!==false), l2=(s.levels&&s.levels.level_2===true);
+  let mode="l1l2";
+  if(s.tke_safe!==false) mode="tke";
+  else if(l1&&!l2) mode="l1";
+  else if(!l1&&l2) mode="l2";
+  else mode="l1l2";
+  const r=document.querySelector(`input[name="mode"][value="${mode}"]`); if(r) r.checked=true;
+  if(s.sections) sectionState={...sectionState,...s.sections};
+  disabledControls=new Set(s.disabled_controls||[]);
+  renderSections();
+}
 
 // init
-async function init(){ try{ await loadDistros(); await loadCatalog(); presets=await jget("/api/presets");
-  renderPresets(); refreshBuilds(); refreshStatus(); refreshSavedSelections(); refreshValidations();
+async function init(){ try{ await loadDistros(); await loadCatalog();
+  initModes(); renderSections();
+  refreshBuilds(); refreshStatus(); refreshSavedSelections(); refreshValidations();
   setInterval(()=>{ refreshBuilds(); refreshStatus(); refreshValidations(); },5000);
 }catch(e){ toast("Init failed: "+e.message); } }
 init();
