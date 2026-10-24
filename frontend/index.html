@@ -36,8 +36,15 @@
   button.sm { padding:3px 9px; font-size:12px; }
   .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
   .grow { flex:1; min-width:0; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; max-width:720px; }
-  .card.wide { max-width:960px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
+  .card.wide { }
+  /* Build page two-column layout: config on the left, controls on the right. */
+  .build-grid { display:grid; grid-template-columns: minmax(360px, 460px) 1fr; gap:18px; align-items:start; }
+  .build-grid .col-left { min-width:0; }
+  .build-grid .col-right { min-width:0; }
+  .build-grid .col-right .card { margin-bottom:0; }
+  /* On narrow screens, stack. */
+  @media (max-width:1100px){ .build-grid { grid-template-columns:1fr; } }
   .note { color:var(--muted); font-size:12px; }
   .preset-desc { color:var(--muted); margin:8px 0 0; }
   /* hardening mode cards */
@@ -50,6 +57,8 @@
   .mode-card .mode-desc { color:var(--muted); font-size:12px; }
   .mode-card:has(input:checked) { border-color:#2563eb; background:rgba(37,99,235,.12); box-shadow:0 0 0 1px #2563eb inset; }
   /* controls */
+  .qf { background:var(--panel2); }
+  .qf.active { background:var(--accent); border-color:var(--accent2); font-weight:600; }
   .toolbar { position:sticky; top:0; background:var(--bg); padding-bottom:10px; z-index:5; }
   .counts { color:var(--muted); font-size:12px; }
   .section { border:1px solid var(--line); border-radius:8px; margin-bottom:9px; background:var(--panel); overflow:hidden; }
@@ -125,72 +134,83 @@
 <!-- TAB: BUILD -->
 <div class="tabpane active" data-pane="build">
   <div class="scroll">
-    <div class="card">
-      <h2>1 · Base image &amp; distribution</h2>
-      <div class="row">
-        <label class="row" style="gap:6px">Distro <select id="distro"></select></label>
-        <input id="baseImage" class="grow" placeholder="base image id (img-xxxx) — optional, else template default" />
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>2 · Hardening mode</h2>
-      <div id="modeCards" class="mode-cards">
-        <label class="mode-card"><input type="radio" name="mode" value="l1" />
-          <span class="mode-title">CIS Level 1 only</span>
-          <span class="mode-desc">Baseline hardening. Lower disruption, safe starting posture.</span></label>
-        <label class="mode-card"><input type="radio" name="mode" value="l2" />
-          <span class="mode-title">CIS Level 2 only</span>
-          <span class="mode-desc">Only the stricter Level 2 controls. For high-security targets.</span></label>
-        <label class="mode-card"><input type="radio" name="mode" value="l1l2" />
-          <span class="mode-title">CIS Level 1 + Level 2</span>
-          <span class="mode-desc">Full CIS benchmark — both levels, no exceptions.</span></label>
-        <label class="mode-card"><input type="radio" name="mode" value="tke" checked />
-          <span class="mode-title">TKE safe mode</span>
-          <span class="mode-desc">Full L1+L2 with Kubernetes exceptions so the node still joins TKE. Recommended.</span></label>
-      </div>
-      <div class="row" style="margin-top:14px">
-        <button class="primary" id="buildBtn">Build image</button>
-        <button id="previewBtn">Preview vars</button>
-        <span id="buildMsg" class="note"></span>
-      </div>
-    </div>
-
-    <div class="card wide">
-      <h2>3 · Controls in this build</h2>
-      <p class="note" style="margin:0 0 8px">
-        Every control the selected mode applies is listed below. Toggle any control off,
-        or click <b>Show Ansible</b> to see the exact task it runs.
-        <span class="badge breaking">breaking</span> stops node join/networking ·
-        <span class="badge caution">caution</span> may affect workloads · breaking
-        controls are locked in TKE safe mode.
-      </p>
-      <div class="toolbar">
+   <div class="build-grid">
+    <div class="col-left">
+      <div class="card">
+        <h2>1 · Base image &amp; distribution</h2>
         <div class="row">
-          <input id="filter" class="grow" placeholder="filter by id, title, or risk (breaking/caution)…" />
-          <button id="expandAll" class="sm">⊕ expand</button>
-          <button id="collapseAll" class="sm">⊖ collapse</button>
+          <label class="row" style="gap:6px">Distro <select id="distro"></select></label>
+          <input id="baseImage" class="grow" placeholder="base image id (img-xxxx) — optional, else template default" />
         </div>
-        <div class="row" style="margin-top:6px"><span class="counts" id="counts"></span></div>
       </div>
-      <div id="sections"></div>
+
+      <div class="card">
+        <h2>2 · Hardening mode</h2>
+        <div id="modeCards" class="mode-cards">
+          <label class="mode-card"><input type="radio" name="mode" value="l1" />
+            <span class="mode-title">CIS Level 1 only</span>
+            <span class="mode-desc">Baseline hardening. Lower disruption, safe starting posture.</span></label>
+          <label class="mode-card"><input type="radio" name="mode" value="l2" />
+            <span class="mode-title">CIS Level 2 only</span>
+            <span class="mode-desc">Only the stricter Level 2 controls. For high-security targets.</span></label>
+          <label class="mode-card"><input type="radio" name="mode" value="l1l2" />
+            <span class="mode-title">CIS Level 1 + Level 2</span>
+            <span class="mode-desc">Full CIS benchmark — both levels, no exceptions.</span></label>
+          <label class="mode-card"><input type="radio" name="mode" value="tke" checked />
+            <span class="mode-title">TKE safe mode</span>
+            <span class="mode-desc">Full L1+L2 with Kubernetes exceptions so the node still joins TKE. Recommended.</span></label>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="primary" id="buildBtn">Build image</button>
+          <button id="previewBtn">Preview vars</button>
+          <span id="buildMsg" class="note"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Saved selections</h2>
+        <div class="row">
+          <select id="savedSel"><option value="">— saved selections —</option></select>
+          <button id="loadSelBtn">Load</button>
+          <button id="delSelBtn">Delete</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <input id="selName" class="grow" placeholder="name to save current selection" />
+          <button id="saveSelBtn">Save current</button>
+        </div>
+      </div>
+
+      <h2>Generated group_vars (preview)</h2>
+      <pre id="preview">Click "Preview vars" to see the exact generated all.yml.</pre>
     </div>
 
-    <div class="card">
-      <h2>Saved selections</h2>
-      <div class="row">
-        <select id="savedSel"><option value="">— saved selections —</option></select>
-        <button id="loadSelBtn">Load</button>
-        <button id="delSelBtn">Delete</button>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <input id="selName" class="grow" placeholder="name to save current selection" />
-        <button id="saveSelBtn">Save current</button>
+    <div class="col-right">
+      <div class="card wide">
+        <h2>3 · Controls in this build</h2>
+        <p class="note" style="margin:0 0 8px">
+          Toggle any control off, or click <b>Show Ansible</b> to see the exact task it runs.
+          <span class="badge breaking">breaking</span> stops node join/networking ·
+          <span class="badge caution">caution</span> may affect workloads · breaking
+          controls are locked in TKE safe mode.
+        </p>
+        <div class="toolbar">
+          <div class="row" id="quickFilters">
+            <button class="sm qf" data-qf="all">All</button>
+            <button class="sm qf" data-qf="exceptions">TKE exceptions (breaking + caution)</button>
+            <button class="sm qf" data-qf="breaking">Breaking</button>
+            <button class="sm qf" data-qf="caution">Caution</button>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <input id="filter" class="grow" placeholder="filter by id, title, or risk…" />
+            <button id="expandAll" class="sm">⊕ expand</button>
+            <button id="collapseAll" class="sm">⊖ collapse</button>
+          </div>
+          <div class="row" style="margin-top:6px"><span class="counts" id="counts"></span></div>
+        </div>
+        <div id="sections"></div>
       </div>
     </div>
-
-    <h2>Generated group_vars (preview)</h2>
-    <pre id="preview">Click "Preview vars" to see the exact generated all.yml.</pre>
+   </div>
   </div>
 </div>
 
@@ -317,28 +337,50 @@ async function loadDistros(){ const d=await jget("/api/distros"); currentDistro=
 }
 async function loadCatalog(){ catalog=await jget("/api/catalog?distro="+encodeURIComponent(currentDistro)); }
 
-// mode selector — re-render controls when the hardening mode changes (the
-// breaking-control locking depends on whether the mode is TKE-safe).
-function initModes(){ document.querySelectorAll('input[name="mode"]').forEach(r=>r.onchange=()=>renderSections()); }
+// Risk quick-filter: "all" | "exceptions" | "breaking" | "caution".
+let riskFilter="all";
+function setRiskFilter(f){ riskFilter=f;
+  document.querySelectorAll('.qf').forEach(b=>b.classList.toggle('active', b.dataset.qf===f));
+  renderSections(); }
+
+// mode selector — re-render controls when the hardening mode changes. Selecting
+// TKE safe mode auto-focuses the controls that the TKE exceptions touch
+// (breaking + caution), so you see exactly what's special-cased.
+function initModes(){
+  document.querySelectorAll('input[name="mode"]').forEach(r=>r.onchange=()=>{
+    if(r.checked && r.value==="tke") setRiskFilter("exceptions");
+    else renderSections();
+  });
+  document.querySelectorAll('.qf').forEach(b=>b.onclick=()=>setRiskFilter(b.dataset.qf));
+}
 
 // controls render + filter + inline detail
-function matchesFilter(c,q){ if(!q)return true; q=q.toLowerCase();
+function matchesRisk(c){
+  if(riskFilter==="all") return true;
+  if(riskFilter==="exceptions") return c.tke_risk==="breaking"||c.tke_risk==="caution";
+  return c.tke_risk===riskFilter;
+}
+function matchesFilter(c,q){ if(!matchesRisk(c)) return false;
+  if(!q)return true; q=q.toLowerCase();
   return c.id.toLowerCase().includes(q)||(c.title||"").toLowerCase().includes(q)||(c.tke_risk||"").toLowerCase().includes(q); }
 function renderSections(){
   if(!catalog) return;
   const wrap=$("sections"); wrap.innerHTML=""; const tkeSafe=MODES[currentMode()].tke_safe; const sel=currentSelection();
   const q=$("filter").value.trim(); let shown=0, enabledCount=0, total=catalog.controls.length;
+  // "filtering" = any active narrowing (text query OR a risk quick-filter other
+  // than All). When filtering, empty sections are hidden and matches auto-open.
+  const filtering = !!q || riskFilter!=="all";
   for(const c of catalog.controls){ if(!disabledControls.has(c.id)&&sel.sections[c.section]!==false) enabledCount++; }
   for(const sec of catalog.sections){
     const secOn=sel.sections[sec.number]!==false;
     const ctls=catalog.controls.filter(c=>c.section===sec.number && matchesFilter(c,q));
-    if(q&&ctls.length===0) continue; shown+=ctls.length;
+    if(filtering&&ctls.length===0) continue; shown+=ctls.length;
     const div=document.createElement("div"); div.className="section";
     const head=document.createElement("div"); head.className="section-head";
     head.innerHTML=`<input type="checkbox" ${secOn?"checked":""} />
       <span class="name">Section ${sec.number} — ${esc(sec.name)}</span>
-      <span class="count">${ctls.length}${q?" shown":"/"+sec.control_count} ▸</span>`;
-    const body=document.createElement("div"); body.className="controls"+(q?" open":"");
+      <span class="count">${ctls.length}${filtering?" shown":"/"+sec.control_count} ▸</span>`;
+    const body=document.createElement("div"); body.className="controls"+(filtering?" open":"");
     head.querySelector("input").onclick=(e)=>{ e.stopPropagation(); toggleSection(sec.number,e.target.checked); };
     head.onclick=()=>body.classList.toggle("open");
     for(const c of ctls){
@@ -361,7 +403,7 @@ function renderSections(){
     div.appendChild(head); div.appendChild(body); wrap.appendChild(div);
   }
   renderCounts();
-  function renderCounts(){ $("counts").textContent=`${enabledCount} enabled of ${total} controls`+(q?` · ${shown} match filter`:""); }
+  function renderCounts(){ $("counts").textContent=`${enabledCount} enabled of ${total} controls`+(filtering?` · ${shown} shown`:""); }
 }
 function toggleSection(num,on){ sectionState[num]=on; renderSections(); }
 async function toggleDetail(id, ctlEl){
@@ -734,7 +776,9 @@ function _applySel(s){
 
 // init
 async function init(){ try{ await loadDistros(); await loadCatalog();
-  initModes(); renderSections();
+  initModes();
+  // Default mode is TKE safe → start focused on the TKE exceptions.
+  setRiskFilter(currentMode()==="tke" ? "exceptions" : "all");
   refreshBuilds(); refreshStatus(); refreshSavedSelections(); refreshValidations();
   setInterval(()=>{ refreshBuilds(); refreshStatus(); refreshValidations(); },5000);
 }catch(e){ toast("Init failed: "+e.message); } }
